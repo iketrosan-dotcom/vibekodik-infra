@@ -1,0 +1,170 @@
+#cloud-config
+
+# Cloud-init для релейера vibekodik.
+# Что делает при первой загрузке VM:
+#   1. Создаёт пользователя ubuntu с нашим SSH-ключом.
+#   2. Меняет SSH-порт на 5722.
+#   3. Ставит nginx + fail2ban + certbot.
+#   4. Раскладывает hardening-конфиг nginx (server_tokens off, rate/conn limits).
+#   5. Раскладывает bootstrap-конфиг (HTTP-only) — для первого старта nginx.
+#   6. Создаёт 1GB swap (страховка от OOM на 1GB RAM).
+#   7. Включает fail2ban для sshd:5722.
+#   8. Запускает certbot — выпускает Let's Encrypt cert для relayer.vibekodik.ru
+#      через HTTP-01 challenge на порту 80.
+#   9. Заменяет bootstrap на финальный конфиг (HTTP→HTTPS redirect +
+#      HTTPS reverse-proxy + 444 default-блоки для чужих Host'ов).
+#  10. Перезапускает ssh + nginx.
+#
+# ПРЕДУСЛОВИЯ перед запуском cloud-init:
+#   - DNS A-запись relayer.vibekodik.ru должна указывать на reserved IP VM
+#     (иначе certbot не пройдёт ACME-challenge).
+#   - SG должна разрешать ingress 80, 443, 5722. Egress — открыт.
+#
+# ВАЖНО про base64 в write_files:
+#   Yandex Cloud metadata API шаблонизирует user-data на стороне сервера и
+#   «съедает» переменные вида $remote_addr, $scheme, $binary_remote_addr и т.п.
+#   (заменяет на пустоту -> nginx -t падает).
+#   Все nginx-конфиги, где есть $-переменные, кодируем base64 -> YC не трогает,
+#   cloud-init декодирует обратно при записи.
+
+package_update: true
+packages:
+  - nginx
+  - fail2ban
+  - certbot
+  - python3-certbot-nginx
+
+# Стандартный пользователь Ubuntu-образа, прописываем декларативно
+# чтобы не зависеть от настроек образа.
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  # SSH на нестандартном порту 5722
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # nginx hardening: скрыть версию + зоны для rate-limit / conn-limit.
+  # Содержит $binary_remote_addr -> base64.
+  # Декод:
+  #   server_tokens off;
+  #   limit_req_zone  $binary_remote_addr zone=relayer_rps:10m rate=30r/s;
+  #   limit_conn_zone $binary_remote_addr zone=relayer_conn:10m;
+  - path: /etc/nginx/conf.d/00-hardening.conf
+    encoding: base64
+    content: c2VydmVyX3Rva2VucyBvZmY7CmxpbWl0X3JlcV96b25lICAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9cmVsYXllcl9ycHM6MTBtIHJhdGU9MzByL3M7CmxpbWl0X2Nvbm5fem9uZSAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9cmVsYXllcl9jb25uOjEwbTsK
+    permissions: "0644"
+
+  # BOOTSTRAP конфиг (HTTP-only) — активируется первым. Нужен потому что
+  # финальный конфиг ссылается на /etc/letsencrypt/live/.../*.pem, которых при
+  # первом запуске ещё нет — nginx -t упал бы. Bootstrap проксирует через 80,
+  # certbot с этим конфигом проходит ACME-challenge и выпускает cert,
+  # после чего runcmd переключает на финальный конфиг.
+  # Декод:
+  #   server {
+  #       listen 80;  listen [::]:80;
+  #       server_name relayer.vibekodik.ru;
+  #       proxy_connect_timeout 30s; proxy_send_timeout 60s; proxy_read_timeout 60s;
+  #       location / {
+  #           limit_req  zone=relayer_rps  burst=60 nodelay;
+  #           limit_conn relayer_conn 50;
+  #           proxy_pass https://api.vibekodik.ru;
+  #           proxy_set_header Host              api.vibekodik.ru;
+  #           proxy_set_header X-Real-IP         $remote_addr;
+  #           proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+  #           proxy_set_header X-Forwarded-Proto $scheme;
+  #           proxy_ssl_server_name on;
+  #           proxy_ssl_name        api.vibekodik.ru;
+  #       }
+  #   }
+  #   server {
+  #       listen 80 default_server; listen [::]:80 default_server;
+  #       server_name _; return 444;
+  #   }
+  - path: /etc/nginx/sites-available/relayer-bootstrap
+    encoding: base64
+    content: c2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIGxpc3RlbiBbOjpdOjgwOwogICAgc2VydmVyX25hbWUgcmVsYXllci52aWJla29kaWsucnU7CgogICAgcHJveHlfY29ubmVjdF90aW1lb3V0IDMwczsKICAgIHByb3h5X3NlbmRfdGltZW91dCAgICA2MHM7CiAgICBwcm94eV9yZWFkX3RpbWVvdXQgICAgNjBzOwoKICAgIGxvY2F0aW9uIC8gewogICAgICAgIGxpbWl0X3JlcSAgem9uZT1yZWxheWVyX3JwcyAgYnVyc3Q9NjAgbm9kZWxheTsKICAgICAgICBsaW1pdF9jb25uIHJlbGF5ZXJfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwczovL2FwaS52aWJla29kaWsucnU7CgogICAgICAgIHByb3h5X3NldF9oZWFkZXIgSG9zdCAgICAgICAgICAgICAgYXBpLnZpYmVrb2Rpay5ydTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtUmVhbC1JUCAgICAgICAgICRyZW1vdGVfYWRkcjsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtRm9yd2FyZGVkLUZvciAgICRwcm94eV9hZGRfeF9mb3J3YXJkZWRfZm9yOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtUHJvdG8gJHNjaGVtZTsKCiAgICAgICAgcHJveHlfc3NsX3NlcnZlcl9uYW1lIG9uOwogICAgICAgIHByb3h5X3NzbF9uYW1lICAgICAgICBhcGkudmliZWtvZGlrLnJ1OwogICAgfQp9CgpzZXJ2ZXIgewogICAgbGlzdGVuIDgwIGRlZmF1bHRfc2VydmVyOwogICAgbGlzdGVuIFs6Ol06ODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBzZXJ2ZXJfbmFtZSBfOwogICAgcmV0dXJuIDQ0NDsKfQo=
+    permissions: "0644"
+
+  # FINAL конфиг — активируется ПОСЛЕ выпуска cert.
+  # Декод:
+  #   server {  # HTTP -> HTTPS redirect
+  #       listen 80; listen [::]:80;
+  #       server_name relayer.vibekodik.ru;
+  #       return 301 https://$host$request_uri;
+  #   }
+  #   server {  # HTTPS reverse-proxy
+  #       listen 443 ssl; listen [::]:443 ssl;
+  #       server_name relayer.vibekodik.ru;
+  #       ssl_certificate     /etc/letsencrypt/live/relayer.vibekodik.ru/fullchain.pem;
+  #       ssl_certificate_key /etc/letsencrypt/live/relayer.vibekodik.ru/privkey.pem;
+  #       include /etc/letsencrypt/options-ssl-nginx.conf;
+  #       ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+  #       proxy_*_timeout ..., proxy_pass, headers (как в bootstrap)
+  #   }
+  #   server {  # default 80 -> 444
+  #       listen 80 default_server; listen [::]:80 default_server;
+  #       server_name _; return 444;
+  #   }
+  #   server {  # default 443 -> 444 (re-using own cert)
+  #       listen 443 ssl default_server; listen [::]:443 ssl default_server;
+  #       server_name _;
+  #       ssl_certificate ... (тот же); return 444;
+  #   }
+  - path: /etc/nginx/sites-available/relayer-final
+    encoding: base64
+    content: IyBIVFRQIC0+IEhUVFBTIHJlZGlyZWN0IGZvciBvdXIgZG9tYWluCnNlcnZlciB7CiAgICBsaXN0ZW4gODA7CiAgICBsaXN0ZW4gWzo6XTo4MDsKICAgIHNlcnZlcl9uYW1lIHJlbGF5ZXIudmliZWtvZGlrLnJ1OwoKICAgIHJldHVybiAzMDEgaHR0cHM6Ly8kaG9zdCRyZXF1ZXN0X3VyaTsKfQoKIyBIVFRQUyByZXZlcnNlLXByb3h5CnNlcnZlciB7CiAgICBsaXN0ZW4gNDQzIHNzbDsKICAgIGxpc3RlbiBbOjpdOjQ0MyBzc2w7CiAgICBzZXJ2ZXJfbmFtZSByZWxheWVyLnZpYmVrb2Rpay5ydTsKCiAgICBzc2xfY2VydGlmaWNhdGUgICAgIC9ldGMvbGV0c2VuY3J5cHQvbGl2ZS9yZWxheWVyLnZpYmVrb2Rpay5ydS9mdWxsY2hhaW4ucGVtOwogICAgc3NsX2NlcnRpZmljYXRlX2tleSAvZXRjL2xldHNlbmNyeXB0L2xpdmUvcmVsYXllci52aWJla29kaWsucnUvcHJpdmtleS5wZW07CiAgICBpbmNsdWRlIC9ldGMvbGV0c2VuY3J5cHQvb3B0aW9ucy1zc2wtbmdpbnguY29uZjsKICAgIHNzbF9kaHBhcmFtIC9ldGMvbGV0c2VuY3J5cHQvc3NsLWRocGFyYW1zLnBlbTsKCiAgICBwcm94eV9jb25uZWN0X3RpbWVvdXQgMzBzOwogICAgcHJveHlfc2VuZF90aW1lb3V0ICAgIDYwczsKICAgIHByb3h5X3JlYWRfdGltZW91dCAgICA2MHM7CgogICAgbG9jYXRpb24gLyB7CiAgICAgICAgbGltaXRfcmVxICB6b25lPXJlbGF5ZXJfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4gcmVsYXllcl9jb25uIDUwOwoKICAgICAgICBwcm94eV9wYXNzIGh0dHBzOi8vYXBpLnZpYmVrb2Rpay5ydTsKCiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBIb3N0ICAgICAgICAgICAgICBhcGkudmliZWtvZGlrLnJ1OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwoKICAgICAgICBwcm94eV9zc2xfc2VydmVyX25hbWUgb247CiAgICAgICAgcHJveHlfc3NsX25hbWUgICAgICAgIGFwaS52aWJla29kaWsucnU7CiAgICB9Cn0KCiMgRGVmYXVsdCBibG9ja3M6IGZvcmVpZ24gSG9zdCBoZWFkZXJzIC8gZGlyZWN0IElQIGFjY2VzcyAtPiBjbG9zZSBjb25uZWN0aW9uCnNlcnZlciB7CiAgICBsaXN0ZW4gODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBsaXN0ZW4gWzo6XTo4MCBkZWZhdWx0X3NlcnZlcjsKICAgIHNlcnZlcl9uYW1lIF87CiAgICByZXR1cm4gNDQ0Owp9CgpzZXJ2ZXIgewogICAgbGlzdGVuIDQ0MyBzc2wgZGVmYXVsdF9zZXJ2ZXI7CiAgICBsaXN0ZW4gWzo6XTo0NDMgc3NsIGRlZmF1bHRfc2VydmVyOwogICAgc2VydmVyX25hbWUgXzsKCiAgICBzc2xfY2VydGlmaWNhdGUgICAgIC9ldGMvbGV0c2VuY3J5cHQvbGl2ZS9yZWxheWVyLnZpYmVrb2Rpay5ydS9mdWxsY2hhaW4ucGVtOwogICAgc3NsX2NlcnRpZmljYXRlX2tleSAvZXRjL2xldHNlbmNyeXB0L2xpdmUvcmVsYXllci52aWJla29kaWsucnUvcHJpdmtleS5wZW07CiAgICBpbmNsdWRlIC9ldGMvbGV0c2VuY3J5cHQvb3B0aW9ucy1zc2wtbmdpbnguY29uZjsKICAgIHNzbF9kaHBhcmFtIC9ldGMvbGV0c2VuY3J5cHQvc3NsLWRocGFyYW1zLnBlbTsKCiAgICByZXR1cm4gNDQ0Owp9Cg==
+    permissions: "0644"
+
+  # fail2ban: sshd на 5722 + nginx-http-auth
+  # Декод:
+  #   [sshd]
+  #   enabled = true
+  #   port    = 5722
+  #   maxretry = 5
+  #   findtime = 10m
+  #   bantime  = 1h
+  #
+  #   [nginx-http-auth]
+  #   enabled = true
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCgpbbmdpbngtaHR0cC1hdXRoXQplbmFibGVkID0gdHJ1ZQo=
+    permissions: "0644"
+
+runcmd:
+  # Swap 1GB — страховка от OOM на 1GB RAM
+  - fallocate -l 1G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # nginx: убираем default-сайт, поднимаем bootstrap (HTTP-only)
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/relayer-bootstrap /etc/nginx/sites-enabled/relayer
+  - nginx -t
+  - systemctl reload nginx
+
+  # fail2ban + ssh restart с новым портом
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
+
+  # certbot: выпускаем Let's Encrypt cert через HTTP-01 challenge.
+  # certbot --nginx добавит в bootstrap-конфиг 443-блок и редирект, но мы это
+  # тут же затрём финальной версией.
+  # NB: для успешного challenge домен relayer.vibekodik.ru должен резолвиться
+  # на наш публичный IP ДО запуска cloud-init.
+  - certbot --nginx -d relayer.vibekodik.ru --email k.ketrosan@headframe.io --agree-tos --no-eff-email --redirect --non-interactive
+
+  # Переключаем nginx на финальный конфиг (TLS + 444 default-блоки)
+  - ln -sf /etc/nginx/sites-available/relayer-final /etc/nginx/sites-enabled/relayer
+  - nginx -t
+  - systemctl reload nginx

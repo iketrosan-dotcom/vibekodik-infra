@@ -1,0 +1,24 @@
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor backups / temp
+*.bak
+*.tmp
+*~
+*.swp
+.vscode/
+.idea/
+
+# Secrets — на всякий случай (у нас сейчас нет, но защита на будущее)
+*.pem
+*.key
+*.p12
+.env
+.env.*
+secrets/
+credentials/
+*-credentials*
+id_rsa*
+id_ed25519*

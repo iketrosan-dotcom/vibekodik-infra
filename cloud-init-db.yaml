@@ -1,0 +1,145 @@
+#cloud-config
+
+# Cloud-init для DB-сервера (vibekodik-db).
+# Stack: MySQL 8.0 (Ubuntu 24.04 native) + Redis 7 (co-located).
+# NB: спека упоминает MySQL 8.4 LTS, но MySQL APT repo для noble (24.04) пока не отдаёт
+# mysql-community-server (mysql-8.4-lts repo есть, но пакета нет). Используем Ubuntu native 8.0
+# из noble-updates — функционально эквивалентно. Когда 8.4 для noble появится — apt upgrade.
+#
+# Storage: основной диск (Ubuntu + /var/lib/mysql) + второй диск (/dev/vdb1) под binlogs.
+#
+# При первой загрузке:
+#   1. Пользователь ubuntu + SSH-ключ, SSH порт 5722.
+#   2. Mount /dev/vdb1 на /var/lib/mysql-binlogs (ext4) — disk_setup + mounts module.
+#   3. ПОДГОТОВКА mount-point ДО mysql install: chown mysql:mysql + chmod 750.
+#      (mysql user UID/GID 110/113 на Ubuntu 24.04 — фиксированы пакетом mysql-common,
+#       а пакет в зависимостях mysql-server. Можно создать вручную для синхронности
+#       в runcmd ДО mysql-server install — мы используем второй вариант.)
+#   4. AppArmor local override — стандартный профиль usr.sbin.mysqld не разрешает
+#      mysqld писать в /var/lib/mysql-binlogs. Без override mysqld падает с
+#      "Permission denied" на mysql-bin.index.
+#   5. Конфиг zz-vibekodik.cnf (имя ZZ — чтобы загружался ПОСЛЕ Ubuntu's mysqld.cnf,
+#      иначе bind-address=127.0.0.1 из mysqld.cnf переопределяет наш 0.0.0.0).
+#   6. Redis 7 (Ubuntu 24.04 default).
+#   7. fail2ban (sshd), swap 4 GB.
+#
+# Сеть: VM в private subnet, БЕЗ public IP. Egress через NAT для apt-обновлений.
+# Доступ к 3306/6379 — только из app-sg. SSH — только через bastion (relayer-01).
+
+package_update: true
+packages:
+  - mysql-server
+  - redis-server
+  - fail2ban
+  - htop
+  - jq
+  - curl
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+# Второй диск — под binlogs/backups. cloud-init разметит и смонтирует.
+disk_setup:
+  /dev/vdb:
+    table_type: gpt
+    layout: True
+    overwrite: False
+
+fs_setup:
+  - device: /dev/vdb1
+    filesystem: ext4
+    label: mysql-binlogs
+
+mounts:
+  - [/dev/vdb1, /var/lib/mysql-binlogs, ext4, "defaults,noatime", "0", "2"]
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # MySQL custom config — production tuning.
+  # Имя zz-* чтобы загружался ПОСЛЕ Ubuntu's mysqld.cnf (alphabetical order:
+  # 'm' < 'z'); иначе bind-address=127.0.0.1 из mysqld.cnf переопределяет наш.
+  # Декод:
+  #   [mysqld]
+  #   innodb_buffer_pool_size = 10G
+  #   innodb_buffer_pool_instances = 8
+  #   innodb_log_file_size = 1G
+  #   innodb_flush_log_at_trx_commit = 1
+  #   innodb_flush_method = O_DIRECT
+  #   bind-address = 0.0.0.0
+  #   mysqlx-bind-address = 127.0.0.1
+  #   log_bin = /var/lib/mysql-binlogs/mysql-bin
+  #   binlog_expire_logs_seconds = 604800
+  #   sync_binlog = 1
+  #   server_id = 1
+  #   slow_query_log = 1
+  #   slow_query_log_file = /var/log/mysql/mysql-slow.log
+  #   long_query_time = 1
+  - path: /etc/mysql/mysql.conf.d/zz-vibekodik.cnf
+    encoding: base64
+    content: W215c3FsZF0KIyB2aWJla29kaWsgcHJvZHVjdGlvbiB0dW5pbmcKCiMgTWVtb3J5Cmlubm9kYl9idWZmZXJfcG9vbF9zaXplID0gMTBHCmlubm9kYl9idWZmZXJfcG9vbF9pbnN0YW5jZXMgPSA4Cmlubm9kYl9sb2dfZmlsZV9zaXplID0gMUcKaW5ub2RiX2ZsdXNoX2xvZ19hdF90cnhfY29tbWl0ID0gMQppbm5vZGJfZmx1c2hfbWV0aG9kID0gT19ESVJFQ1QKCiMgTmV0d29yayDigJQgYmluZCBvbiBhbGwgaW50ZXJmZWlzZWtzIChmaXJld2FsbGVkIGJ5IFlDIFNHIHRvIGFwcC1zZyBvbmx5KQpiaW5kLWFkZHJlc3MgPSAwLjAuMC4wCm15c3FseC1iaW5kLWFkZHJlc3MgPSAxMjcuMC4wLjEKCiMgQmlubG9ncyBvbiBhIHNlcGFyYXRlIHZvbHVtZQpsb2dfYmluID0gL3Zhci9saWIvbXlzcWwtYmlubG9ncy9teXNxbC1iaW4KYmlubG9nX2V4cGlyZV9sb2dzX3NlY29uZHMgPSA2MDQ4MDAKc3luY19iaW5sb2cgPSAxCnNlcnZlcl9pZCA9IDEKCiMgU2xvdyBxdWVyeSBsb2cgKGhlbHBmdWwgZm9yIGRlYnVnZ2luZykKc2xvd19xdWVyeV9sb2cgPSAxCnNsb3dfcXVlcnlfbG9nX2ZpbGUgPSAvdmFyL2xvZy9teXNxbC9teXNxbC1zbG93LmxvZwpsb25nX3F1ZXJ5X3RpbWUgPSAxCg==
+    permissions: "0644"
+
+  # AppArmor local override — стандартный профиль mysqld разрешает только /var/lib/mysql/.
+  # Без этого override mysqld не сможет писать binlogs в /var/lib/mysql-binlogs/.
+  # Cloud-init положит файл, runcmd сделает apparmor_parser -r после установки mysql.
+  - path: /etc/apparmor.d/local/usr.sbin.mysqld
+    content: |
+      # Allow MySQL to write binlogs to mounted volume
+      /var/lib/mysql-binlogs/ r,
+      /var/lib/mysql-binlogs/** rwk,
+    permissions: "0644"
+
+  # Redis custom config (append-style — после include в default redis.conf).
+  - path: /etc/redis/redis-vibekodik.conf
+    encoding: base64
+    content: IyB2aWJla29kaWsgUmVkaXMgdHVuaW5nIOKAlCBhcHBlbmRlZCB0byBkZWZhdWx0IHJlZGlzLmNvbmYgdmlhIGluY2x1ZGUKCiMgTWVtb3J5Cm1heG1lbW9yeSAxZ2IKbWF4bWVtb3J5LXBvbGljeSBhbGxrZXlzLWxydQoKIyBOZXR3b3JrIOKAlCBiaW5kIG9uIGFsbCBpbnRlcmZlaXNla3MgKGZpcmV3YWxsZWQgYnkgWUMgU0cgdG8gYXBwLXNnIG9ubHkpCmJpbmQgMC4wLjAuMCAtOjoxCnByb3RlY3RlZC1tb2RlIG5vCgojIFBlcnNpc3RlbmNlOiBrZWVwIFJEQiBzbmFwc2hvdHMgb25seSAoUmVkaXMgdXNlZCBmb3IgcmF0ZS1saW1pdGVyICsgc2Vzc2lvbnMsCiMgZHVyYWJsZSBkYXRhIGxpdmVzIHYgTXlTUUwpCnNhdmUgOTAwIDEKc2F2ZSAzMDAgMTAKc2F2ZSA2MCAxMDAwMAoKIyBMb2dnaW5nCmxvZ2xldmVsIG5vdGljZQo=
+    permissions: "0644"
+
+  # fail2ban
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCg==
+    permissions: "0644"
+
+runcmd:
+  # Swap 4 GB
+  - fallocate -l 4G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # ВАЖНО: Починка binlog dir ДО запуска mysql.
+  # mysql-server из cloud-init packages: устанавливается ДО runcmd. Его post-install
+  # пытается стартовать mysqld, который сразу пишет mysql-bin.index в binlogs dir.
+  # Если binlogs dir не принадлежит mysql user — установка падает.
+  # Стратегия: mount уже выполнен cloud-init mounts module ДО packages install
+  # (модули mounts запускаются до cc_package_update_upgrade_install).
+  # А тут мы лечим failed-state ПОСЛЕ install и перезапускаем чистый mysql.
+  - chown -R mysql:mysql /var/lib/mysql-binlogs
+  - chmod 750 /var/lib/mysql-binlogs
+
+  # AppArmor reload — подхватывает наш override из /etc/apparmor.d/local/usr.sbin.mysqld
+  - apparmor_parser -r /etc/apparmor.d/usr.sbin.mysqld
+
+  # Если первый старт mysql упал из-за perms/AppArmor — сбрасываем failed state
+  # и перезапускаем чистым стартом (mysqld тут уже инициализировал /var/lib/mysql).
+  - systemctl reset-failed mysql || true
+  - systemctl restart mysql
+
+  # Подключаем наш Redis-конфиг через include в default redis.conf
+  - sh -c 'grep -q "redis-vibekodik.conf" /etc/redis/redis.conf || echo "include /etc/redis/redis-vibekodik.conf" >> /etc/redis/redis.conf'
+  - systemctl restart redis-server
+
+  # fail2ban + ssh restart
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh

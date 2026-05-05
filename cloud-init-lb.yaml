@@ -1,0 +1,88 @@
+#cloud-config
+
+# Cloud-init для Load Balancer (vibekodik-lb).
+# Stack: nginx (TLS termination + HTTP routing + SSE-aware reverse proxy).
+# При первой загрузке:
+#   1. Пользователь ubuntu + SSH-ключ.
+#   2. SSH порт 5722.
+#   3. nginx + certbot + python3-certbot-nginx + fail2ban (apt).
+#   4. Hardening (server_tokens off, rate/conn-limit zones).
+#   5. Stub-конфиг nginx — proxy_pass на app/frontend через YC internal DNS.
+#   6. Swap 1 GB.
+#   7. Запуск nginx (HTTP-only — TLS добавим позже когда домен будет известен).
+#
+# TLS НЕ выпускается автоматически — нужен домен (релейерный паттерн с certbot
+# применим, когда у LB будет DNS A-запись на его публичный IP).
+#
+# Backend pool ссылается на YC internal DNS:
+#   vibekodik-app-01.ru-central1.internal:8000
+#   vibekodik-app-02.ru-central1.internal:8000
+#   vibekodik-frontend.ru-central1.internal:3000
+# Если эти VM ещё не подняты при старте LB, nginx -t всё равно пройдёт
+# (resolver lazy-resolves upstream). При недоступности апстрима — 502.
+
+package_update: true
+packages:
+  - nginx
+  - certbot
+  - python3-certbot-nginx
+  - fail2ban
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # nginx hardening: server_tokens off + rate/conn-limit zones.
+  # Декод:
+  #   server_tokens off;
+  #   limit_req_zone  $binary_remote_addr zone=api_rps:10m rate=30r/s;
+  #   limit_conn_zone $binary_remote_addr zone=api_conn:10m;
+  - path: /etc/nginx/conf.d/00-hardening.conf
+    encoding: base64
+    content: c2VydmVyX3Rva2VucyBvZmY7CmxpbWl0X3JlcV96b25lICAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9YXBpX3JwczoxMG0gcmF0ZT0zMHIvczsKbGltaXRfY29ubl96b25lICRiaW5hcnlfcmVtb3RlX2FkZHIgem9uZT1hcGlfY29ubjoxMG07Cg==
+    permissions: "0644"
+
+  # LB site-конфиг (HTTP-only, без TLS пока):
+  #   - /healthz → 200 ok (для health-check самого LB)
+  #   - /api/   → backend pool (FastAPI/uvicorn, с long-timeouts для SSE)
+  #   - /      → frontend pool (с upgrade-headers для WS)
+  # Содержит $-переменные ($binary_remote_addr, $host, $remote_addr, $scheme,
+  # $proxy_add_x_forwarded_for, $http_upgrade) → base64 (YC жуёт $-substitution).
+  - path: /etc/nginx/sites-available/lb
+    encoding: base64
+    content: IyBTdHViIG5naW54IGNvbmZpZyDigJQgYWN0dWFsIHVwc3RyZWFtL1RMUyB3aWxsIGJlIGFkZGVkIHdoZW4gZG9tYWluICsgYmFja2VuZCBjb2RlIGlzIGRlcGxveWVkLgojIEJhY2tlbmQgcG9vbCByZXNvbHZlcyB2aWEgWUMgaW50ZXJuYWwgRE5TICh2aWJla29kaWstYXBwLU5OLnJ1LWNlbnRyYWwxLmludGVybmFsKS4KIyBGcm9udGVuZCByZXNvbHZlcyB2aWEgdmliZWtvZGlrLWZyb250ZW5kLnJ1LWNlbnRyYWwxLmludGVybmFsLgoKdXBzdHJlYW0gYmFja2VuZCB7CiAgICBzZXJ2ZXIgdmliZWtvZGlrLWFwcC0wMS5ydS1jZW50cmFsMS5pbnRlcm5hbDo4MDAwIG1heF9mYWlscz0zIGZhaWxfdGltZW91dD0zMHM7CiAgICBzZXJ2ZXIgdmliZWtvZGlrLWFwcC0wMi5ydS1jZW50cmFsMS5pbnRlcm5hbDo4MDAwIG1heF9mYWlscz0zIGZhaWxfdGltZW91dD0zMHM7CiAgICBrZWVwYWxpdmUgMzI7Cn0KCnVwc3RyZWFtIGZyb250ZW5kIHsKICAgIHNlcnZlciB2aWJla29kaWstZnJvbnRlbmQucnUtY2VudHJhbDEuaW50ZXJuYWw6MzAwMCBtYXhfZmFpbHM9MyBmYWlsX3RpbWVvdXQ9MzBzOwogICAga2VlcGFsaXZlIDE2Owp9CgpzZXJ2ZXIgewogICAgbGlzdGVuIDgwIGRlZmF1bHRfc2VydmVyOwogICAgbGlzdGVuIFs6Ol06ODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBzZXJ2ZXJfbmFtZSBfOwoKICAgICMgSGVhbHRoIGNoZWNrIGVuZHBvaW50IGZvciBvdXJzZWx2ZXMKICAgIGxvY2F0aW9uID0gL2hlYWx0aHogewogICAgICAgIGFjY2Vzc19sb2cgb2ZmOwogICAgICAgIHJldHVybiAyMDAgIm9rXG4iOwogICAgfQoKICAgICMgQVBJIOKGkiBiYWNrZW5kCiAgICBsb2NhdGlvbiAvYXBpLyB7CiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vYmFja2VuZDsKICAgICAgICBwcm94eV9odHRwX3ZlcnNpb24gMS4xOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgSG9zdCAgICAgICAgICAgICAgJGhvc3Q7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLVJlYWwtSVAgICAgICAgICAkcmVtb3RlX2FkZHI7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Gb3IgICAkcHJveHlfYWRkX3hfZm9yd2FyZGVkX2ZvcjsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtRm9yd2FyZGVkLVByb3RvICRzY2hlbWU7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBDb25uZWN0aW9uICAgICAgICAiIjsKCiAgICAgICAgIyBTU0UtYXdhcmU6IGxvbmcgdGltZW91dHMsIG5vIGJ1ZmZlcmluZwogICAgICAgIHByb3h5X2J1ZmZlcmluZyBvZmY7CiAgICAgICAgcHJveHlfcmVhZF90aW1lb3V0IDFoOwogICAgICAgIHByb3h5X3NlbmRfdGltZW91dCAxaDsKICAgIH0KCiAgICAjIEV2ZXJ5dGhpbmcgZWxzZSDihpIgZnJvbnRlbmQKICAgIGxvY2F0aW9uIC8gewogICAgICAgIHByb3h5X3Bhc3MgaHR0cDovL2Zyb250ZW5kOwogICAgICAgIHByb3h5X2h0dHBfdmVyc2lvbiAxLjE7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBIb3N0ICAgICAgICAgICAgICAkaG9zdDsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtUmVhbC1JUCAgICAgICAgICRyZW1vdGVfYWRkcjsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtRm9yd2FyZGVkLUZvciAgICRwcm94eV9hZGRfeF9mb3J3YXJkZWRfZm9yOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtUHJvdG8gJHNjaGVtZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFVwZ3JhZGUgICAgICAgICAgICRodHRwX3VwZ3JhZGU7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBDb25uZWN0aW9uICAgICAgICAidXBncmFkZSI7CiAgICB9Cn0K
+    permissions: "0644"
+
+  # fail2ban: sshd на 5722
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCgpbbmdpbngtaHR0cC1hdXRoXQplbmFibGVkID0gdHJ1ZQo=
+    permissions: "0644"
+
+runcmd:
+  # Swap 1 GB
+  - fallocate -l 1G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # nginx: убираем default, ставим LB-конфиг
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/lb /etc/nginx/sites-enabled/lb
+  - nginx -t
+  - systemctl reload nginx
+
+  # fail2ban + ssh restart
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh

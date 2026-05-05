@@ -1,0 +1,73 @@
+#cloud-config
+
+# Cloud-init для Frontend сервера (vibekodik-frontend).
+# Stack: Node.js 22 LTS (Next.js / Vite / etc.).
+#
+# При первой загрузке готовим ОКРУЖЕНИЕ — код деплоится отдельно.
+#   1. Пользователь ubuntu + SSH-ключ.
+#   2. SSH порт 5722.
+#   3. Node.js 22 LTS из NodeSource APT-репо + npm + build-deps.
+#   4. fail2ban (sshd).
+#   5. Swap 4 GB.
+#   6. /opt/vibekodik-frontend (workspace) — owner ubuntu.
+#
+# НЕ устанавливается:
+#   - сам код фронтенда (придёт через CI/git)
+#   - npm dependencies — будут после деплоя через `npm ci`
+#   - process manager (pm2 / systemd unit) — настраивается под код
+#
+# Сеть: VM в private subnet, egress через NAT. Public IP не нужен.
+
+package_update: true
+packages:
+  # Build deps
+  - build-essential
+  - python3
+  # Tooling
+  - git
+  - curl
+  - jq
+  - htop
+  - ca-certificates
+  - gnupg
+  - fail2ban
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # fail2ban
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCg==
+    permissions: "0644"
+
+runcmd:
+  # Swap 4 GB
+  - fallocate -l 4G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # Node.js 22 LTS из NodeSource
+  - sh -c 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -'
+  - apt-get install -y nodejs
+
+  # Workspace
+  - mkdir -p /opt/vibekodik-frontend
+  - chown ubuntu:ubuntu /opt/vibekodik-frontend
+
+  # fail2ban + ssh restart
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh

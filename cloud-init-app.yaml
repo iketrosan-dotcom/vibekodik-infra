@@ -1,0 +1,73 @@
+#cloud-config
+
+# Cloud-init для Backend App-серверов (vibekodik-app-01, vibekodik-app-02).
+# Stack: Python 3.12 + uvicorn/FastAPI + PyTorch CPU + GLiNER.
+#
+# При первой загрузке готовим ОКРУЖЕНИЕ — код будет деплоен отдельно.
+#   1. Пользователь ubuntu + SSH-ключ.
+#   2. SSH порт 5722.
+#   3. Python 3.12 + venv + pip + build-deps.
+#   4. fail2ban (sshd).
+#   5. Swap 4 GB (16 GB RAM — много, но swap страховка от OOM при загрузке моделей).
+#   6. /opt/vibekodik (workspace) — owner ubuntu.
+#
+# НЕ устанавливается:
+#   - сам код приложения (придёт через CI/git)
+#   - uvicorn / FastAPI / PyTorch / GLiNER — это в venv проекта
+#
+# Сеть: VM в private subnet (vibekodik-prod-a, 10.128.1.0/24), egress
+# через NAT gateway. Public IP не нужен — SSH через bastion (relayer-01).
+
+package_update: true
+packages:
+  # Python 3.12 (default in Ubuntu 24.04)
+  - python3.12
+  - python3.12-venv
+  - python3.12-dev
+  - python3-pip
+  # Build deps (нужны для сборки wheels для PyTorch / nativе пакетов)
+  - build-essential
+  - libssl-dev
+  - libffi-dev
+  # Tooling
+  - git
+  - curl
+  - jq
+  - htop
+  - fail2ban
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # fail2ban: sshd на 5722
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCg==
+    permissions: "0644"
+
+runcmd:
+  # Swap 4 GB (страховка для PyTorch CPU при загрузке весов модели)
+  - fallocate -l 4G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # Workspace для приложения
+  - mkdir -p /opt/vibekodik
+  - chown ubuntu:ubuntu /opt/vibekodik
+
+  # fail2ban + ssh restart
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
