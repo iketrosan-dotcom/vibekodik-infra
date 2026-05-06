@@ -1,0 +1,117 @@
+# LLM outbound forward-proxy (Frankfurt → providers).
+# Применяется к VM Kodik-RevProxy и KodikRouter-RevProxy (DigitalOcean).
+#
+# Идея: backend в РФ шлёт LLM-запрос к нам с тремя дополнительными заголовками:
+#   X-Proxy-Auth: Bearer <token>           — авторизация на нашем прокси
+#   X-Target-URL: https://api.openai.com/v1/chat/completions   — куда форвардить
+#   Authorization: Bearer <provider-key>   — пробрасывается к target как есть
+# Прокси проверяет auth, парсит X-Target-URL, проверяет домен по whitelist
+# и форвардит запрос на target. Provider видит немецкий IP — пропускает.
+#
+# Заголовок X-Proxy-Auth выбран отдельно от Authorization специально:
+# Authorization резервируется под api-key конкретного LLM-провайдера и пробрасывается
+# в target как есть. Так один HTTP-запрос несёт оба секрета без коллизии.
+#
+# При деплое:
+#   sed -i "s/__SERVER_NAME__/proxy.kodik.ru/" nginx-llm-proxy.conf
+#   sed -i "s/__PROXY_TOKEN__/<actual token>/" nginx-llm-proxy.conf
+
+# Map hash sizes увеличены — у нас длинные ключи (Bearer + 64-char hex token = 71 char,
+# не влезает в дефолтный bucket 64).
+map_hash_bucket_size 128;
+map_hash_max_size 2048;
+
+# DNS resolver — нужен для динамического proxy_pass с переменной.
+resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+resolver_timeout 5s;
+
+# Парсим X-Target-URL на компоненты через map (без if в location).
+map $http_x_target_url $target_proto {
+    default "";
+    "~^(https?)://" $1;
+}
+map $http_x_target_url $target_host {
+    default "";
+    "~^https?://([^/:?#]+)" $1;
+}
+map $http_x_target_url $target_path_args {
+    default "/";
+    "~^https?://[^/]+(/[^?#]*)" $1;
+}
+
+# Whitelist разрешённых LLM-провайдеров.
+# Чтобы добавить нового — добавь строчку и `nginx -s reload` (без даунтайма).
+map $target_host $target_allowed {
+    default 0;
+    "api.openai.com"      1;
+    "api.anthropic.com"   1;
+    "openrouter.ai"       1;
+    "api.deepseek.com"    1;
+    "api.moonshot.cn"     1;
+    "open.bigmodel.cn"    1;
+    "api.atlascloud.ai"   1;
+    "api.dmxapi.cn"       1;
+}
+
+# Bearer-токен для нашего прокси.
+map $http_x_proxy_auth $proxy_auth_ok {
+    default 0;
+    "Bearer __PROXY_TOKEN__" 1;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __SERVER_NAME__;
+
+    # Health-check — без авторизации, для мониторинга/probes.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type "text/plain" always;
+        return 200 "ok\n";
+    }
+
+    location / {
+        # 1. Auth check
+        if ($proxy_auth_ok != 1) {
+            add_header Content-Type "text/plain" always;
+            return 401 "Unauthorized: missing or invalid X-Proxy-Auth\n";
+        }
+        # 2. Target URL присутствует?
+        if ($http_x_target_url = "") {
+            add_header Content-Type "text/plain" always;
+            return 400 "Bad Request: missing X-Target-URL header\n";
+        }
+        # 3. Target host разрешён?
+        if ($target_allowed != 1) {
+            add_header Content-Type "text/plain" always;
+            return 403 "Forbidden: target host not in allowlist\n";
+        }
+
+        # Форвардим запрос на target. proxy_pass с переменной форсит
+        # nginx делать DNS lookup (через resolver выше) на каждый запрос.
+        proxy_pass $target_proto://$target_host$target_path_args$is_args$args;
+        proxy_http_version 1.1;
+
+        # Подменяем Host на target — чтобы провайдер видел запрос как обычный.
+        proxy_set_header Host $target_host;
+
+        # Не пробрасываем служебные заголовки нашего прокси к target.
+        proxy_set_header X-Target-URL "";
+        proxy_set_header X-Proxy-Auth "";
+        # Authorization (если backend его прислал — там api-key для провайдера) —
+        # пробрасывается к target БЕЗ ИЗМЕНЕНИЙ (дефолт nginx).
+
+        # SSE-aware: long timeouts, no buffering — для streaming chat completions.
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_connect_timeout 30s;
+
+        # SNI и host verification для HTTPS target.
+        proxy_ssl_server_name on;
+        proxy_ssl_name $target_host;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+    }
+}

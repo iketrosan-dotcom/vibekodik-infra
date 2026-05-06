@@ -11,7 +11,7 @@ desktop.ini
 .vscode/
 .idea/
 
-# Secrets — на всякий случай (у нас сейчас нет, но защита на будущее)
+# Secrets
 *.pem
 *.key
 *.p12
@@ -20,5 +20,8 @@ desktop.ini
 secrets/
 credentials/
 *-credentials*
+*-tokens.txt
+*tokens*.txt
+proxy-tokens*
 id_rsa*
 id_ed25519*
