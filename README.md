@@ -1,8 +1,13 @@
 # vibekodik-infra
 
-Infrastructure-as-Code для AI-платформы vibekodik в Yandex Cloud.
+Infrastructure-as-Code для AI-платформы vibekodik.
 
-## Архитектура
+Содержит две независимые инсталляции:
+
+1. **Yandex Cloud (RU)** — основной prod-стек (LB + 2 app + frontend + DB + bastion-релейер).
+2. **DigitalOcean (Frankfurt)** — outbound LLM-прокси, чтобы запросы из RU backend к OpenAI/Anthropic/etc уходили с зарубежного IP (provider'ы блокируют русские IP).
+
+## Архитектура — RU prod (Yandex Cloud)
 
 ```
                    internet
@@ -38,6 +43,36 @@ Infrastructure-as-Code для AI-платформы vibekodik в Yandex Cloud.
 | [`cloud-init-db.yaml`](cloud-init-db.yaml) | MySQL 8 + Redis 7 (co-located). innodb_buffer_pool_size=10G, log_bin на отдельный volume. AppArmor override для custom binlog dir. |
 | [`create-prod-vms.ps1`](create-prod-vms.ps1) | Bootstrap-скрипт: резервирует static IP и создаёт все 5 prod-VM одной серией (с pre-flight quota check). |
 | [`quota-request.md`](quota-request.md) | Шпаргалка какие квоты YC и до каких значений запрашивать перед запуском prod. |
+| [`bootstrap-do-proxy.sh`](bootstrap-do-proxy.sh) | Bootstrap для DO-прокси VM (Frankfurt) — outbound proxy для LLM-провайдеров. См. ниже. |
+
+## Архитектура — outbound LLM-proxy (DigitalOcean Frankfurt)
+
+Отдельные VPS у DigitalOcean во Frankfurt. Назначение: backend в РФ → LLM-провайдеры (OpenAI/Anthropic/etc.) идут не напрямую (provider блокирует РФ-IP), а через эти прокси. Provider видит немецкий IP — пропускает.
+
+```
+                 [user]
+                   ↓
+              [RU backend]
+                   ↓ (LLM call с заголовком X-Target-URL)
+   ┌───────────────┴───────────────┐
+   ↓                               ↓
+proxy.kodik.ru                  proxy.kodikrouter.ru
+(157.230.120.167)               (64.226.78.10)
+   ↓                               ↓
+   └─────────► [provider] ◄────────┘
+       (api.openai.com, api.anthropic.com, ...)
+```
+
+Две VM нужны под два бизнес-продукта (Kodik и KodikRouter), чтобы разделить биллинг и изолировать failure domain.
+
+**Текущее состояние (2026-05-06):** [`bootstrap-do-proxy.sh`](bootstrap-do-proxy.sh) применён к обеим VM — стоит nginx, fail2ban, ufw, swap; default site возвращает 444 для чужих Host'ов.
+
+**Открытые задачи** (заблокированы вопросами к dev-команде):
+- DNS A-записи `proxy.kodik.ru` → `157.230.120.167`, `proxy.kodikrouter.ru` → `64.226.78.10`
+- TLS через Let's Encrypt (нужен DNS из пункта выше)
+- Формат заголовка `X-Target-URL` для forward-proxy nginx-конфига
+- Авторизация: Bearer-токен или whitelist по IP RU backend
+- Список разрешённых target-доменов (LLM-провайдеры)
 
 ## Общие принципы
 
