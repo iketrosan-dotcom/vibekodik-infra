@@ -71,10 +71,10 @@ proxy.kodik.ru                  proxy.kodikrouter.ru
 |---|---|---|
 | Bootstrap (nginx/fail2ban/ufw/swap) | ✅ | ✅ |
 | forward-proxy конфиг (X-Target-URL + Bearer auth + whitelist 8 LLM provider'ов) | ✅ | ✅ |
-| DNS A-record | ✅ | ❌ ждём (zone есть на Selectel, A-запись не создана) |
-| Let's Encrypt cert | ✅ до 2026-08-05 | ⏸️ зависит от DNS |
-| HTTPS + redirect 80→443 | ✅ | ⏸️ |
-| Bearer-токен ротирован после TLS | ✅ | ⏸️ (текущий "светил" в HTTP до выпуска cert'a) |
+| DNS A-record | ✅ | ✅ (Selectel zone, добавлено 2026-05-07) |
+| Let's Encrypt cert | ✅ до 2026-08-05 | ✅ до 2026-08-05 |
+| HTTPS + redirect 80→443 | ✅ | ✅ |
+| Bearer-токен ротирован после TLS | ✅ | ✅ |
 
 Шаблоны:
 - [`bootstrap-do-proxy.sh`](bootstrap-do-proxy.sh) — базовый bootstrap (apt, swap, fail2ban, ufw, default 444).
