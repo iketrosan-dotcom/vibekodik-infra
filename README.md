@@ -65,14 +65,25 @@ proxy.kodik.ru                  proxy.kodikrouter.ru
 
 Две VM нужны под два бизнес-продукта (Kodik и KodikRouter), чтобы разделить биллинг и изолировать failure domain.
 
-**Текущее состояние (2026-05-06):** [`bootstrap-do-proxy.sh`](bootstrap-do-proxy.sh) применён к обеим VM — стоит nginx, fail2ban, ufw, swap; default site возвращает 444 для чужих Host'ов.
+**Состояние (2026-05-07):**
 
-**Открытые задачи** (заблокированы вопросами к dev-команде):
-- DNS A-записи `proxy.kodik.ru` → `157.230.120.167`, `proxy.kodikrouter.ru` → `64.226.78.10`
-- TLS через Let's Encrypt (нужен DNS из пункта выше)
-- Формат заголовка `X-Target-URL` для forward-proxy nginx-конфига
-- Авторизация: Bearer-токен или whitelist по IP RU backend
-- Список разрешённых target-доменов (LLM-провайдеры)
+| | `proxy.kodik.ru` (157.230.120.167) | `proxy.kodikrouter.ru` (64.226.78.10) |
+|---|---|---|
+| Bootstrap (nginx/fail2ban/ufw/swap) | ✅ | ✅ |
+| forward-proxy конфиг (X-Target-URL + Bearer auth + whitelist 8 LLM provider'ов) | ✅ | ✅ |
+| DNS A-record | ✅ | ❌ ждём (zone есть на Selectel, A-запись не создана) |
+| Let's Encrypt cert | ✅ до 2026-08-05 | ⏸️ зависит от DNS |
+| HTTPS + redirect 80→443 | ✅ | ⏸️ |
+| Bearer-токен ротирован после TLS | ✅ | ⏸️ (текущий "светил" в HTTP до выпуска cert'a) |
+
+Шаблоны:
+- [`bootstrap-do-proxy.sh`](bootstrap-do-proxy.sh) — базовый bootstrap (apt, swap, fail2ban, ufw, default 444).
+- [`nginx-llm-proxy.conf.template`](nginx-llm-proxy.conf.template) — HTTP-only forward-proxy (фаза без TLS).
+- [`nginx-llm-proxy-tls.conf.template`](nginx-llm-proxy-tls.conf.template) — финальная TLS-версия (HTTP→HTTPS redirect, 443 ssl, default 444 для чужих SNI/Host).
+
+Бережно к секретам:
+- Токены **не в репо** — лежат локально в `proxy-tokens.txt` (gitignored). Backend получает через `.env`.
+- Приватный SSH-ключ от DO — `~/.ssh/id_rsa_kodik` (был получен через Telegram, после деплоя на kodikrouter рекомендуется его сменить).
 
 ## Общие принципы
 

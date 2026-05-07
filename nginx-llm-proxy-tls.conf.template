@@ -1,0 +1,149 @@
+# LLM outbound forward-proxy с TLS (Let's Encrypt) — финальная боевая версия.
+# Используется ПОСЛЕ выпуска cert через certbot. До TLS — см. nginx-llm-proxy.conf.template.
+#
+# Подстановки при деплое:
+#   __SERVER_NAME__   → proxy.kodik.ru / proxy.kodikrouter.ru
+#   __PROXY_TOKEN__   → 64-char hex Bearer token (отдельный для каждой VM)
+#
+# Структура: 4 server-блока:
+#   1. HTTP (80) → 301 https. Оставлен path /.well-known/acme-challenge/ для cert renewal.
+#   2. HTTPS (443) для нашего домена → forward-proxy (auth + X-Target-URL + whitelist).
+#   3. HTTP default → return 444 (ловит запросы с чужими Host header'ами).
+#   4. HTTPS default → return 444 (то же самое для TLS).
+
+map_hash_bucket_size 128;
+map_hash_max_size 2048;
+
+resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+resolver_timeout 5s;
+
+# === X-Target-URL парсинг ===
+map $http_x_target_url $target_proto {
+    default "";
+    "~^(https?)://" $1;
+}
+map $http_x_target_url $target_host {
+    default "";
+    "~^https?://([^/:?#]+)" $1;
+}
+map $http_x_target_url $target_path_args {
+    default "/";
+    "~^https?://[^/]+(/[^?#]*)" $1;
+}
+
+# === Whitelist разрешённых LLM-провайдеров ===
+map $target_host $target_allowed {
+    default 0;
+    "api.openai.com"      1;
+    "api.anthropic.com"   1;
+    "openrouter.ai"       1;
+    "api.deepseek.com"    1;
+    "api.moonshot.cn"     1;
+    "open.bigmodel.cn"    1;
+    "api.atlascloud.ai"   1;
+    "api.dmxapi.cn"       1;
+}
+
+# === Bearer токен для нашего прокси (отдельный header X-Proxy-Auth) ===
+map $http_x_proxy_auth $proxy_auth_ok {
+    default 0;
+    "Bearer __PROXY_TOKEN__" 1;
+}
+
+# ============== 1. HTTP → HTTPS redirect (наш домен) ==============
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __SERVER_NAME__;
+
+    # Let's Encrypt webroot — оставлен открытым по HTTP для cert renewal.
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        allow all;
+        access_log off;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ============== 2. HTTPS forward-proxy (наш домен) ==============
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name __SERVER_NAME__;
+
+    ssl_certificate     /etc/letsencrypt/live/__SERVER_NAME__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__SERVER_NAME__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    # Health-check без auth — для мониторинга / probes.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type "text/plain" always;
+        return 200 "ok\n";
+    }
+
+    location / {
+        if ($proxy_auth_ok != 1) {
+            add_header Content-Type "text/plain" always;
+            return 401 "Unauthorized: missing or invalid X-Proxy-Auth\n";
+        }
+        if ($http_x_target_url = "") {
+            add_header Content-Type "text/plain" always;
+            return 400 "Bad Request: missing X-Target-URL header\n";
+        }
+        if ($target_allowed != 1) {
+            add_header Content-Type "text/plain" always;
+            return 403 "Forbidden: target host not in allowlist\n";
+        }
+
+        proxy_pass $target_proto://$target_host$target_path_args$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host $target_host;
+        proxy_set_header X-Target-URL "";
+        proxy_set_header X-Proxy-Auth "";
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_connect_timeout 30s;
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name $target_host;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+    }
+}
+
+# ============== 3. HTTP default — закрываем чужие Host'ы ==============
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+# ============== 4. HTTPS default — закрываем чужие SNI / IP-доступ ==============
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+
+    # Reuse того же cert — клиент при handshake увидит CN=__SERVER_NAME__,
+    # поймёт что не туда попал. После handshake сразу close без response.
+    ssl_certificate     /etc/letsencrypt/live/__SERVER_NAME__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__SERVER_NAME__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    return 444;
+}
