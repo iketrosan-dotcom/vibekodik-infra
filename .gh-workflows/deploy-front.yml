@@ -1,0 +1,78 @@
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'git ref to deploy'
+        required: false
+        default: 'main'
+
+# Frontend — единственный таргет, последний коммит лучше → cancel-in-progress=true
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, kodik, front]
+    steps:
+      - name: Pull + build + restart
+        run: |
+          ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.20 '
+            set -e
+            cd /opt/vibekodik-frontend/app
+            echo "HEAD before: $(git rev-parse --short HEAD)"
+            git rev-parse HEAD > .last-good-sha
+            git pull --ff-only origin main
+            echo "HEAD after:  $(git rev-parse --short HEAD)"
+            npm ci --no-audit --no-fund
+            NODE_ENV=production npm run build
+            sudo systemctl restart kodikrouter-frontend
+          '
+      - name: Health check (wait up to 30s)
+        run: |
+          for i in $(seq 1 15); do
+            code=$(ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.20 \
+              "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/" 2>/dev/null || echo 000)
+            echo "attempt $i: $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Public smoke
+        run: curl -sSf https://kodikrouter.ru/ > /dev/null && echo "public OK"
+
+  notify-success:
+    needs: deploy
+    runs-on: [self-hosted, kodik, front]
+    if: success()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then echo "skip"; exit 0; fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="✅ *KodikRouterFront* deployed \`${{ github.sha }}\`"
+
+  notify-failure:
+    needs: deploy
+    runs-on: [self-hosted, kodik, front]
+    if: failure()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then echo "skip"; exit 0; fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="❌ *KodikRouterFront* DEPLOY FAILED \`${{ github.sha }}\`%0Ahttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

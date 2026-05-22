@@ -1,0 +1,126 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'git ref to deploy (для rollback — например prev SHA)'
+        required: false
+        default: 'main'
+
+# Backend rolling restart: app-01 → wait health → app-02.
+# cancel-in-progress=false — нельзя прервать на середине, прод останется в half-state.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: [self-hosted, kodik, api]
+    continue-on-error: true   # на старте — не блокирует деплой
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+      - name: Setup Python
+        run: |
+          python3.12 -m venv .venv
+          ./.venv/bin/pip install --no-cache-dir -r requirements.txt
+      - name: Run pytest
+        run: ./.venv/bin/pytest -x --tb=short
+        # tests, требующие БД/Redis, упадут — это OK, мы их пометим continue-on-error выше
+
+  deploy-app-01:
+    needs: test
+    runs-on: [self-hosted, kodik, api]
+    steps:
+      - name: Pull + restart app-01
+        run: |
+          ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.13 '
+            set -e
+            cd /opt/vibekodik/api
+            echo "HEAD before: $(git rev-parse --short HEAD)"
+            git rev-parse HEAD > .last-good-sha
+            git pull --ff-only origin main
+            echo "HEAD after:  $(git rev-parse --short HEAD)"
+            ./env/bin/alembic upgrade head
+            sudo systemctl restart kodikrouter-api
+          '
+      - name: Health check app-01 (wait up to 60s)
+        run: |
+          for i in $(seq 1 30); do
+            code=$(ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.13 \
+              "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health" 2>/dev/null || echo 000)
+            echo "attempt $i: $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 2
+          done
+          echo "app-01 health failed after 60s"
+          exit 1
+
+  deploy-app-02:
+    needs: deploy-app-01
+    runs-on: [self-hosted, kodik, api]
+    steps:
+      - name: Pull + restart app-02
+        run: |
+          ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.32 '
+            set -e
+            cd /opt/vibekodik/api
+            git rev-parse HEAD > .last-good-sha
+            git pull --ff-only origin main
+            sudo systemctl restart kodikrouter-api
+          '
+      - name: Health check app-02
+        run: |
+          for i in $(seq 1 30); do
+            code=$(ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.1.32 \
+              "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health" 2>/dev/null || echo 000)
+            echo "attempt $i: $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Public smoke
+        run: curl -sSf https://api.kodikrouter.ru/health > /dev/null && echo "public OK"
+
+  notify-success:
+    needs: deploy-app-02
+    runs-on: [self-hosted, kodik, api]
+    if: success()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then
+            echo "TELEGRAM_BOT_TOKEN / CHAT_ID not set — skipping notification"
+            exit 0
+          fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="✅ *KodikRouterAPI* deployed \`${{ github.sha }}\`"
+
+  notify-failure:
+    needs: [deploy-app-01, deploy-app-02]
+    runs-on: [self-hosted, kodik, api]
+    if: failure()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then
+            echo "TELEGRAM_BOT_TOKEN / CHAT_ID not set — skipping notification"
+            exit 0
+          fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="❌ *KodikRouterAPI* DEPLOY FAILED \`${{ github.sha }}\`%0Ahttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

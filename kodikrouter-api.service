@@ -1,0 +1,29 @@
+[Unit]
+Description=KodikRouter API (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/vibekodik/api
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+Environment=OMP_NUM_THREADS=2
+Environment=MKL_NUM_THREADS=2
+ExecStart=/opt/vibekodik/api/env/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --limit-max-requests 5000 --limit-concurrency 64
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kodikrouter-api
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65535
+MemoryHigh=10G
+MemoryMax=12G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

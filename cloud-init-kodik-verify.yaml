@@ -1,0 +1,126 @@
+#cloud-config
+
+# Cloud-init для VM, на которой будут жить aiscan.kodik.ru и dozor.kodik.ru.
+# Stack: nginx (reverse-proxy) + Node.js 22 LTS + PM2 (process manager) для двух Next.js приложений.
+#
+# Что делает при первой загрузке:
+#   1. ubuntu user + SSH-ключ + SSH порт 5722.
+#   2. Ставит nginx, certbot, fail2ban, Node.js 22 LTS, PM2 (глобально), build tooling.
+#   3. nginx hardening: server_tokens off + rate/conn limit зоны.
+#   4. nginx bootstrap-конфиг (HTTP-only, два server_name: verify/dozor → 127.0.0.1:3000/3001).
+#      Пока Next.js не запущен — nginx ответит 502, но это видимый сигнал, что DNS дошёл.
+#   5. Swap 2 GB (на 4GB VM не критично, но дешёвая страховка при `next build`).
+#   6. /opt/kodik-aiscan и /opt/kodik-dozor — workspace под код.
+#   7. fail2ban (sshd на 5722 + nginx-http-auth).
+#
+# НЕ делает (специально):
+#   - certbot --nginx — отдельный шаг ПОСЛЕ того, как DNS A-записи aiscan.kodik.ru и
+#     dozor.kodik.ru пропагируются. Иначе ACME-challenge сломается и cloud-init
+#     останется в "degraded" состоянии. Команда для запуска позже:
+#       sudo certbot --nginx -d aiscan.kodik.ru -d dozor.kodik.ru \
+#         --email k.ketrosan@headframe.io --agree-tos --no-eff-email --redirect --non-interactive
+#   - Не клонирует код Next.js — придёт через git после того, как Кристиан подготовит репо.
+#   - Не настраивает PM2 ecosystem.config.js — настроится под конкретное приложение.
+#
+# Yandex Cloud user-data gotcha:
+#   YC metadata API съедает $VAR из user-data ДО cloud-init. Поэтому nginx-конфиги
+#   с $remote_addr / $scheme / $host кодируем в base64. См. project_yc_user_data_gotcha.
+
+package_update: true
+packages:
+  - nginx
+  - fail2ban
+  - certbot
+  - python3-certbot-nginx
+  - build-essential
+  - python3
+  - git
+  - curl
+  - jq
+  - htop
+  - ca-certificates
+  - gnupg
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  # SSH на нестандартном порту 5722 (как у остальных VM)
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # nginx hardening (server_tokens + rate/conn-limit зоны).
+  # Содержит $binary_remote_addr → base64.
+  # Декод:
+  #   server_tokens off;
+  #   limit_req_zone  $binary_remote_addr zone=kodik_rps:10m rate=30r/s;
+  #   limit_conn_zone $binary_remote_addr zone=kodik_conn:10m;
+  - path: /etc/nginx/conf.d/00-hardening.conf
+    encoding: base64
+    content: c2VydmVyX3Rva2VucyBvZmY7CmxpbWl0X3JlcV96b25lICAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9a29kaWtfcnBzOjEwbSByYXRlPTMwci9zOwpsaW1pdF9jb25uX3pvbmUgJGJpbmFyeV9yZW1vdGVfYWRkciB6b25lPWtvZGlrX2Nvbm46MTBtOw==
+    permissions: "0644"
+
+  # Bootstrap nginx-конфиг (HTTP-only). Активируется первым. Два server_name:
+  #   aiscan.kodik.ru → proxy_pass http://127.0.0.1:3000   (KodikDetect/hive-detector)
+  #   dozor.kodik.ru  → proxy_pass http://127.0.0.1:3001   (TBD Next.js)
+  # Default-блок на :80 → return 444 (закрыть для чужих Host headers).
+  # Заголовки Upgrade/Connection — для WebSocket / Next.js HMR.
+  # Финальный TLS-конфиг будет создан certbot'ом (`certbot --nginx` сам отредактирует
+  # этот файл, добавив listen 443 ssl + редирект 80→443).
+  - path: /etc/nginx/sites-available/kodik
+    encoding: base64
+    content: IyBhaXNjYW4ua29kaWsucnUg4oCUIHByb3h5IHRvIE5leHQuanMg0L3QsCAxMjcuMC4wLjE6MzAwMCAoS29kaWtEZXRlY3QvaGl2ZS1kZXRlY3RvcikKc2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIGxpc3RlbiBbOjpdOjgwOwogICAgc2VydmVyX25hbWUgYWlzY2FuLmtvZGlrLnJ1OwoKICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCAzMHM7CiAgICBwcm94eV9zZW5kX3RpbWVvdXQgICAgNjBzOwogICAgcHJveHlfcmVhZF90aW1lb3V0ICAgIDYwczsKCiAgICBsb2NhdGlvbiAvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjMwMDA7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgVXBncmFkZSAgICAgICAgICAgJGh0dHBfdXBncmFkZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gICAgICAgICJ1cGdyYWRlIjsKICAgIH0KfQoKIyBkb3pvci5rb2Rpay5ydSDigJQgcHJveHkgdG8gTmV4dC5qcyDQvdCwIDEyNy4wLjAuMTozMDAxCnNlcnZlciB7CiAgICBsaXN0ZW4gODA7CiAgICBsaXN0ZW4gWzo6XTo4MDsKICAgIHNlcnZlcl9uYW1lIGRvem9yLmtvZGlrLnJ1OwoKICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCAzMHM7CiAgICBwcm94eV9zZW5kX3RpbWVvdXQgICAgNjBzOwogICAgcHJveHlfcmVhZF90aW1lb3V0ICAgIDYwczsKCiAgICBsb2NhdGlvbiAvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjMwMDE7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgVXBncmFkZSAgICAgICAgICAgJGh0dHBfdXBncmFkZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gICAgICAgICJ1cGdyYWRlIjsKICAgIH0KfQoKIyBkZWZhdWx0IOKAlCDQt9Cw0LrRgNGL0YLRjCDQtNC70Y8g0YfRg9C20LjRhSBIb3N0IGhlYWRlcnMgLyDQv9GA0Y/QvNC+0LPQviBJUApzZXJ2ZXIgewogICAgbGlzdGVuIDgwIGRlZmF1bHRfc2VydmVyOwogICAgbGlzdGVuIFs6Ol06ODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBzZXJ2ZXJfbmFtZSBfOwogICAgcmV0dXJuIDQ0NDsKfQ==
+    permissions: "0644"
+
+  # fail2ban: sshd на 5722 + nginx-http-auth (тот же файл, что у relayer-01)
+  # Декод:
+  #   [sshd]
+  #   enabled = true
+  #   port    = 5722
+  #   maxretry = 5
+  #   findtime = 10m
+  #   bantime  = 1h
+  #
+  #   [nginx-http-auth]
+  #   enabled = true
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCgpbbmdpbngtaHR0cC1hdXRoXQplbmFibGVkID0gdHJ1ZQo=
+    permissions: "0644"
+
+runcmd:
+  # Swap 2 GB — страховка при `npm ci`/`next build` (TypeScript + webpack любят память)
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # Node.js 22 LTS из NodeSource (как у vibekodik-frontend)
+  - sh -c 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -'
+  - apt-get install -y nodejs
+
+  # PM2 глобально (process manager для Next.js — Кристиан попросил pm2)
+  - npm install -g pm2
+
+  # Workspace директории под два сайта
+  - mkdir -p /opt/kodik-aiscan /opt/kodik-dozor
+  - chown ubuntu:ubuntu /opt/kodik-aiscan /opt/kodik-dozor
+
+  # nginx: убираем default-сайт, поднимаем наш конфиг (HTTP-only пока).
+  # nginx ответит 502 на verify/dozor пока Next.js не запущен — это нормально.
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/kodik /etc/nginx/sites-enabled/kodik
+  - nginx -t
+  - systemctl reload nginx
+
+  # fail2ban + ssh restart с портом 5722
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh

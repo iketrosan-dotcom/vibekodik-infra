@@ -1,0 +1,211 @@
+#cloud-config
+
+# Cloud-init для VM kodik-hosting.
+#
+# Назначение: Kodik Hosting Provider — приёмник запросов от основного Kodik API.
+# Билдит Docker-образы пользователей kodik.ru IDE и отдаёт их по
+# https://<slug>.apps.kodik.ru через Caddy (auto Let's Encrypt).
+#
+# Stack: Docker + Caddy (host) + Python 3.11 venv для hosting-provider.
+# UFW: только 5722/80/443. Hosting-provider :8082 и Caddy admin :2019 — loopback only.
+#
+# Что делает при первой загрузке:
+#   1. ubuntu user + SSH-ключ, SSH на 5722.
+#   2. UFW (deny incoming, разрешаем только 5722/80/443).
+#   3. fail2ban (sshd jail на 5722).
+#   4. Python 3.11 из deadsnakes (на 22.04 default 3.10).
+#   5. Docker (официальный install-скрипт).
+#   6. Caddy из cloudsmith repo, переключаем systemd-unit на /etc/caddy/caddy.json
+#      (пустые routes — hosting-provider будет писать через admin API).
+#   7. Системный пользователь `kodik`, группа docker, каталоги
+#      /opt/kodik, /var/lib/kodik-hosting, /etc/kodik.
+#   8. /etc/kodik/hosting-provider.env с PLACEHOLDER токеном
+#      (backend team подменит реальное значение).
+#   9. Cron: docker system prune раз в неделю.
+#
+# Что НЕ делает (специально):
+#   - Не клонирует репо hosting-provider — URL получаем от backend-команды.
+#   - Не ставит systemd-юниты kodik-hosting-provider.service /
+#     kodik-hosting-worker.service — они в deploy/ внутри репо.
+#   - Не подменяет HOSTING_PROVIDER_TOKEN — это секрет от backend-команды.
+#
+# Yandex Cloud user-data gotcha:
+#   YC metadata API съедает $VAR из user-data ДО cloud-init.
+#   В этом файле $-знаков НЕТ (Caddy JSON, env-файл, shell-команды — без переменных).
+#   Если буду добавлять nginx/shell-конфиг с $ — кодировать в base64.
+
+package_update: true
+packages:
+  - ufw
+  - fail2ban
+  - git
+  - curl
+  - jq
+  - htop
+  - ca-certificates
+  - gnupg
+  - apt-transport-https
+  - debian-keyring
+  - debian-archive-keyring
+  - software-properties-common
+  - python3-pip
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  # SSH на нестандартном порту 5722 (единообразно с остальной флотилией Kodik)
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # Caddy: минимальный admin-only конфиг с пустым :443 server'ом.
+  # Hosting-provider будет POST'ить routes в http://localhost:2019/config/...
+  # Никаких $-vars — JSON, base64 не нужен.
+  - path: /etc/caddy/caddy.json
+    content: |
+      {
+        "admin": { "listen": "localhost:2019" },
+        "apps": {
+          "http": {
+            "servers": {
+              "srv0": {
+                "listen": [":443"],
+                "routes": [],
+                "automatic_https": { "disable": false }
+              }
+            }
+          }
+        }
+      }
+    permissions: "0644"
+
+  # Hosting-provider env. PLACEHOLDER token — backend team подменит.
+  - path: /etc/kodik/hosting-provider.env
+    content: |
+      # Обязательно: совпадает с HOSTING_PROVIDER_TOKEN в .env основного Kodik API.
+      # Backend-команда даст реальное значение — подменить sed'ом или вручную.
+      HOSTING_PROVIDER_TOKEN=REPLACE_ME_REAL_TOKEN_FROM_BACKEND_TEAM
+
+      SQLITE_PATH=/var/lib/kodik-hosting/provider.db
+      WORKSPACE_ROOT=/var/lib/kodik-hosting/workspaces
+
+      PUBLIC_BASE_DOMAIN=apps.kodik.ru
+
+      HOST_BIND_ADDRESS=127.0.0.1
+      HOST_PORT_START=40000
+      HOST_PORT_END=41000
+
+      CADDY_ADMIN_URL=http://localhost:2019
+
+      CONTAINER_MEMORY=512m
+      CONTAINER_CPUS=1.0
+      CRASH_RESTART_LIMIT=5
+
+      WORKER_CONCURRENCY=4
+
+      RUN_INPROCESS_WORKER=false
+      RECONCILE_INTERVAL_SECONDS=60
+    permissions: "0640"
+
+  # fail2ban: sshd на 5722
+  - path: /etc/fail2ban/jail.d/custom.local
+    content: |
+      [sshd]
+      enabled = true
+      port    = 5722
+      maxretry = 5
+      findtime = 10m
+      bantime  = 1h
+    permissions: "0644"
+
+  # README на машине — куда смотреть в случае чего
+  - path: /opt/kodik/README.md
+    content: |
+      # kodik-hosting VM
+
+      Cloud-init создал базу. Дальше backend-команда подкатывает hosting-provider:
+
+      1. Подменить токен:
+         sudo sed -i 's|REPLACE_ME_REAL_TOKEN_FROM_BACKEND_TEAM|<real>|' /etc/kodik/hosting-provider.env
+
+      2. Склонировать репо hosting-provider:
+         sudo -u kodik git clone <URL> /tmp/kodik-api
+         sudo cp -r /tmp/kodik-api/hosting-provider/. /opt/kodik/hosting-provider/
+         sudo chown -R kodik:kodik /opt/kodik/hosting-provider
+
+      3. venv + зависимости:
+         cd /opt/kodik/hosting-provider
+         sudo -u kodik python3.11 -m venv .venv
+         sudo -u kodik .venv/bin/pip install --upgrade pip
+         sudo -u kodik .venv/bin/pip install fastapi uvicorn pydantic pydantic-settings httpx
+
+      4. systemd:
+         sudo cp deploy/kodik-hosting-provider.service /etc/systemd/system/
+         sudo cp deploy/kodik-hosting-worker.service /etc/systemd/system/
+         sudo systemctl daemon-reload
+         sudo systemctl enable --now kodik-hosting-provider.service kodik-hosting-worker.service
+
+      5. Healthcheck:
+         curl http://localhost:8082/health
+
+      Логи:
+         sudo journalctl -u kodik-hosting-provider -u kodik-hosting-worker -f
+         sudo journalctl -u caddy -f
+    permissions: "0644"
+
+runcmd:
+  # SSH сначала — чтобы не потерять доступ если что-то ниже сломается
+  - systemctl restart ssh
+
+  # ufw — DROP всё, кроме SSH/80/443
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 5722/tcp comment 'SSH'
+  - ufw allow 80/tcp comment 'HTTP'
+  - ufw allow 443/tcp comment 'HTTPS'
+  - ufw --force enable
+
+  # fail2ban
+  - systemctl enable --now fail2ban
+
+  # Python 3.11 из deadsnakes (на Ubuntu 22.04 default — 3.10)
+  - add-apt-repository -y ppa:deadsnakes/ppa
+  - apt-get update
+  - apt-get install -y python3.11 python3.11-venv python3.11-dev
+
+  # Docker (официальный install-скрипт)
+  - sh -c 'curl -fsSL https://get.docker.com | sh'
+  - systemctl enable --now docker
+
+  # Caddy из cloudsmith
+  - sh -c 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg'
+  - sh -c 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list'
+  - apt-get update
+  - apt-get install -y caddy
+
+  # Системный пользователь kodik (для hosting-provider Python service)
+  - useradd -r -s /usr/sbin/nologin -d /opt/kodik/hosting-provider kodik
+  - usermod -aG docker kodik
+
+  # Каталоги (workspace + state + config)
+  - mkdir -p /opt/kodik/hosting-provider /var/lib/kodik-hosting /etc/kodik
+  - chown -R kodik:kodik /opt/kodik /var/lib/kodik-hosting
+  - chown root:kodik /etc/kodik/hosting-provider.env
+  - chmod 640 /etc/kodik/hosting-provider.env
+
+  # Caddy: переключить systemd-unit с дефолтного Caddyfile на наш caddy.json
+  - sed -i 's|/etc/caddy/Caddyfile|/etc/caddy/caddy.json|g' /lib/systemd/system/caddy.service
+  - sed -i 's|caddy run --environ --config|caddy run --config|g' /lib/systemd/system/caddy.service
+  - systemctl daemon-reload
+  - systemctl restart caddy
+  - systemctl enable caddy
+
+  # Cron от root: чистка старых Docker-образов раз в неделю (TZ section 11)
+  - sh -c 'echo "0 4 * * 0 docker system prune -af --filter \"until=168h\" > /var/log/docker-prune.log 2>&1" | crontab -'

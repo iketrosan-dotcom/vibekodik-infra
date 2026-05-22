@@ -1,0 +1,127 @@
+#cloud-config
+
+# Cloud-init для kodik-hackathon VM, на которой будет жить hackathon.kodik.ru.
+# Stack:
+#   - nginx (reverse-proxy, TLS будет добавлен 2-stage после готовности DNS)
+#   - Docker + Docker Compose plugin (backend-стек: postgres + redis + FastAPI)
+#   - Node.js 22 LTS + PM2 (frontend: Next.js 15)
+#   - fail2ban (sshd:5722 + nginx-http-auth)
+#
+# Маршрутизация nginx:
+#   hackathon.kodik.ru/api/* → 127.0.0.1:8000 (FastAPI в docker compose)
+#   hackathon.kodik.ru/*     → 127.0.0.1:3000 (Next.js через PM2)
+#   /.well-known/acme-challenge/ → /var/www/letsencrypt (для certbot --webroot)
+#
+# НЕ делает (специально):
+#   - certbot ИЗ cloud-init — отдельный шаг ПОСЛЕ того, как DNS пропагируется
+#     и backend/frontend подняты. Команда:
+#       sudo certbot certonly --webroot -w /var/www/letsencrypt \
+#         -d hackathon.kodik.ru --email k.ketrosan@headframe.io \
+#         --agree-tos --no-eff-email --non-interactive
+#     Затем — финальный nginx-конфиг с TLS, НЕ через `certbot --nginx`
+#     (грабля: certbot копирует `return 444` из default-блока в HTTPS-сервер).
+#   - Не клонирует репо — это делается после, под user'ом ubuntu с PAT.
+#
+# Грабли учтены:
+#   - dpkg-lock от unattended-upgrades → wait-loop первой строкой runcmd
+#     (см. reference_cloud_init_dpkg_lock_gotcha.md)
+#   - $-переменные в nginx-конфиге → base64 (см. project_yc_user_data_gotcha)
+#   - default_server отдаёт 444, но здесь нет Selectel LB → ок (см.
+#     reference_selectel_lb_health_check_gotcha.md — относится только к LB)
+
+package_update: true
+packages:
+  - nginx
+  - fail2ban
+  - certbot
+  - build-essential
+  - python3
+  - git
+  - curl
+  - jq
+  - htop
+  - ca-certificates
+  - gnupg
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  # SSH на нестандартном порту 5722
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  # nginx hardening (server_tokens + rate/conn-limit зоны). $binary_remote_addr → base64.
+  # Декод:
+  #   server_tokens off;
+  #   limit_req_zone  $binary_remote_addr zone=kodik_rps:10m rate=30r/s;
+  #   limit_conn_zone $binary_remote_addr zone=kodik_conn:10m;
+  - path: /etc/nginx/conf.d/00-hardening.conf
+    encoding: base64
+    content: c2VydmVyX3Rva2VucyBvZmY7CmxpbWl0X3JlcV96b25lICAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9a29kaWtfcnBzOjEwbSByYXRlPTMwci9zOwpsaW1pdF9jb25uX3pvbmUgJGJpbmFyeV9yZW1vdGVfYWRkciB6b25lPWtvZGlrX2Nvbm46MTBtOw==
+    permissions: "0644"
+
+  # Bootstrap nginx-конфиг (HTTP-only). hackathon.kodik.ru:
+  #   /api/* → 127.0.0.1:8000  (FastAPI в docker)
+  #   /*     → 127.0.0.1:3000  (Next.js через PM2)
+  #   /.well-known/acme-challenge/ → /var/www/letsencrypt
+  # Default-блок :80 → return 444 (закрыть для чужих Host headers).
+  - path: /etc/nginx/sites-available/kodik
+    encoding: base64
+    content: IyBoYWNrYXRob24ua29kaWsucnUg4oCUIE5leHQuanMgKDMwMDApICsgRmFzdEFQSSAoL2FwaSDihpIgODAwMCkKc2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIGxpc3RlbiBbOjpdOjgwOwogICAgc2VydmVyX25hbWUgaGFja2F0aG9uLmtvZGlrLnJ1OwoKICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCAzMHM7CiAgICBwcm94eV9zZW5kX3RpbWVvdXQgICAgNjBzOwogICAgcHJveHlfcmVhZF90aW1lb3V0ICAgIDYwczsKCiAgICAjIEFDTUUgaHR0cC0wMSBjaGFsbGVuZ2Ug4oCUIGNlcnRib3QgY2VydG9ubHkgLS13ZWJyb290CiAgICBsb2NhdGlvbiAvLndlbGwta25vd24vYWNtZS1jaGFsbGVuZ2UvIHsKICAgICAgICByb290IC92YXIvd3d3L2xldHNlbmNyeXB0OwogICAgICAgIGRlZmF1bHRfdHlwZSAidGV4dC9wbGFpbiI7CiAgICB9CgogICAgIyBBUEkg4oaSIEZhc3RBUEkgYmFja2VuZCAoZG9ja2VyIGNvbXBvc2UsIGJvdW5kIHRvIDEyNy4wLjAuMSkKICAgIGxvY2F0aW9uIC9hcGkvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjgwMDA7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgfQoKICAgICMgRXZlcnl0aGluZyBlbHNlIOKGkiBOZXh0LmpzIChQTTIpCiAgICBsb2NhdGlvbiAvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjMwMDA7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgVXBncmFkZSAgICAgICAgICAgJGh0dHBfdXBncmFkZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gICAgICAgICJ1cGdyYWRlIjsKICAgIH0KfQoKIyBkZWZhdWx0IOKAlCDQt9Cw0LrRgNGL0YLRjCDQv9GA0Y/QvNC+0LkgSVAgLyDRh9GD0LbQvtC5IEhvc3QKc2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZlcjsKICAgIGxpc3RlbiBbOjpdOjgwIGRlZmF1bHRfc2VydmVyOwogICAgc2VydmVyX25hbWUgXzsKICAgIHJldHVybiA0NDQ7Cn0=
+    permissions: "0644"
+
+  # fail2ban: sshd на 5722 + nginx-http-auth
+  - path: /etc/fail2ban/jail.d/custom.local
+    encoding: base64
+    content: W3NzaGRdCmVuYWJsZWQgPSB0cnVlCnBvcnQgICAgPSA1NzIyCm1heHJldHJ5ID0gNQpmaW5kdGltZSA9IDEwbQpiYW50aW1lICA9IDFoCgpbbmdpbngtaHR0cC1hdXRoXQplbmFibGVkID0gdHJ1ZQo=
+    permissions: "0644"
+
+runcmd:
+  # 1) Дождаться, пока unattended-upgrades отпустит dpkg-lock
+  #    (грабля: apt-get падает в cloud-init runcmd, см. reference_cloud_init_dpkg_lock_gotcha.md)
+  - bash -c 'while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do echo "waiting for apt lock..."; sleep 5; done'
+
+  # 2) Swap 2 GB (страховка для next build)
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # 3) Node.js 22 LTS из NodeSource
+  - sh -c 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -'
+  - apt-get install -y nodejs
+
+  # 4) PM2 глобально (для Next.js)
+  - npm install -g pm2
+
+  # 5) Docker (официальный get.docker.com) + добавляем ubuntu в группу docker
+  - sh -c 'curl -fsSL https://get.docker.com | sh'
+  - usermod -aG docker ubuntu
+  - systemctl enable --now docker
+
+  # 6) Workspace и ACME webroot
+  - mkdir -p /opt/kodik-hackathon /var/www/letsencrypt/.well-known/acme-challenge
+  - chown -R ubuntu:ubuntu /opt/kodik-hackathon
+  - chown -R www-data:www-data /var/www/letsencrypt
+
+  # 7) nginx: убрать default-сайт, поднять наш конфиг
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/kodik /etc/nginx/sites-enabled/kodik
+  - nginx -t
+  - systemctl reload nginx
+
+  # 8) fail2ban + ssh restart на 5722
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
+
+  # 9) Маркер готовности (для проверки извне через ssh)
+  - sh -c 'echo "cloud-init done at $(date -u +%FT%TZ)" > /var/log/cloud-init-kodik-hackathon.done'

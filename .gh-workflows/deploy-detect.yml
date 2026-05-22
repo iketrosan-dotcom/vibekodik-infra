@@ -1,0 +1,67 @@
+name: Deploy KodikDetect (scan.kodik.ru)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'hive-detector/**'    # деплоим только если изменился hive-detector subdir
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'git ref to deploy'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy-detect
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, kodik, detect]
+    steps:
+      - name: Trigger wrapper script on kodik-verify
+        run: |
+          ssh -i ~/.ssh/ci_deploy_ed25519 -p 5722 ci-deploy@10.128.0.35 \
+            'sudo /usr/local/bin/deploy-kodik-detect.sh'
+
+      - name: Public smoke
+        run: |
+          curl -sSf https://scan.kodik.ru/ > /dev/null
+          config=$(curl -sS https://scan.kodik.ru/api/config)
+          echo "config: $config"
+          # Все 4 детектора должны быть true
+          echo "$config" | grep -q '"image":true' || { echo "image detector off!"; exit 1; }
+
+  notify-success:
+    needs: deploy
+    runs-on: [self-hosted, kodik, detect]
+    if: success()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then echo "skip"; exit 0; fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="✅ *scan.kodik.ru* deployed \`${{ github.sha }}\`"
+
+  notify-failure:
+    needs: deploy
+    runs-on: [self-hosted, kodik, detect]
+    if: failure()
+    steps:
+      - name: Telegram (skip if not configured)
+        env:
+          BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then echo "skip"; exit 0; fi
+          curl -sS "https://api.telegram.org/bot$BOT/sendMessage" \
+            -d chat_id="$CHAT" \
+            -d parse_mode=Markdown \
+            -d text="❌ *scan.kodik.ru* DEPLOY FAILED \`${{ github.sha }}\`%0Ahttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

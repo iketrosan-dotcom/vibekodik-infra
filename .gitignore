@@ -25,3 +25,9 @@ credentials/
 proxy-tokens*
 id_rsa*
 id_ed25519*
+
+# Local Claude Code settings (machine-specific, not shared)
+.claude/settings.local.json
+
+# One-off diagnostic dumps
+diag-*/
