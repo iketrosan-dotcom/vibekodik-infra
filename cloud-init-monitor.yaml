@@ -1,0 +1,584 @@
+#cloud-config
+
+# Cloud-init для monitor VM (monitor.kodik.ru).
+#
+# Stack: Docker Compose с Prometheus + Loki + Grafana + Alertmanager +
+# Blackbox-exporter. nginx — TLS-term + reverse-proxy.
+#
+# Что делает при первой загрузке:
+#   1. ubuntu user + SSH-ключ, SSH на 5722.
+#   2. UFW (deny incoming, разрешаем только 5722/80/443).
+#   3. fail2ban (sshd jail на 5722).
+#   4. Docker (официальный install-скрипт) + docker compose plugin.
+#   5. Swap 2G (на 8G VM, на случай Loki ingest всплесков).
+#   6. Каталог /opt/monitor/ с docker-compose.yml + конфигами prom/loki/alertmanager/blackbox.
+#   7. nginx HTTP-only (acme-challenge готов под certbot).
+#   8. Стартует docker compose (Grafana доступна на :3000, доступа извне нет до certbot).
+#
+# Что НЕ делает (надо руками после):
+#   - DNS A-record monitor.kodik.ru → этот IP (Selectel UI/API). Делает Кристиан.
+#   - certbot --nginx -d monitor.kodik.ru (выпуск TLS-серта). После DNS ready.
+#   - Заполнить /opt/monitor/secrets.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+#     GRAFANA_ADMIN_PASSWORD). После — `docker compose up -d alertmanager grafana`.
+#   - Открыть :9100 на каждой VM в их SG (см. tools/open-node-exporter-ports.ps1).
+#   - Раскатать node_exporter+promtail на 10 VM (tools/provision-agent.sh).
+#
+# YC user-data gotcha:
+#   YC metadata API ест `$VAR` из user-data ДО cloud-init. nginx-конфиг с
+#   $host/$remote_addr — В BASE64. Остальные конфиги (Prometheus YAML,
+#   Loki YAML, Grafana provisioning) без $-знаков — inline.
+
+package_update: true
+packages:
+  - ufw
+  - fail2ban
+  - git
+  - curl
+  - jq
+  - htop
+  - ca-certificates
+  - gnupg
+  - apt-transport-https
+  - software-properties-common
+  - nginx
+  - certbot
+  - python3-certbot-nginx
+  - apache2-utils
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYSxbBCBt0uuuoYQn2j0fsh2bhNY19YI7gNl3H8WQX4 kristian@vibekodik-20260430
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-port.conf
+    content: |
+      Port 5722
+    permissions: "0644"
+
+  - path: /etc/fail2ban/jail.d/custom.local
+    content: |
+      [DEFAULT]
+      # IP админа Кристиана + loopback не банить (предотвращает self-lockout при bootstrap)
+      ignoreip = 127.0.0.1/8 ::1 95.24.216.232
+
+      [sshd]
+      enabled = true
+      port    = 5722
+      maxretry = 10
+      findtime = 10m
+      bantime  = 10m
+
+      [nginx-http-auth]
+      enabled = true
+      port    = http,https
+      maxretry = 10
+    permissions: "0644"
+
+  # nginx HTTP-only (stage 1, для acme-challenge).
+  # После выпуска TLS-серта certbot перепишет этот файл — НЕ ВРУЧНУЮ переписывать.
+  # Закодирован в base64: внутри есть $-vars ($host, $request_uri, $remote_addr и т.д.),
+  # которые YC metadata API съел бы.
+  - path: /etc/nginx/sites-available/monitor
+    encoding: b64
+    content: c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZlcjsKICAgIGxpc3RlbiBbOjpdOjgwIGRlZmF1bHRfc2VydmVyOwogICAgc2VydmVyX25hbWUgbW9uaXRvci5rb2Rpay5ydTsKCiAgICAjIExldCdzIEVuY3J5cHQgYWNtZS1jaGFsbGVuZ2UgcGF0aAogICAgbG9jYXRpb24gLy53ZWxsLWtub3duL2FjbWUtY2hhbGxlbmdlLyB7CiAgICAgICAgcm9vdCAvdmFyL3d3dy9jZXJ0Ym90OwogICAgfQoKICAgICMgUGxhY2Vob2xkZXIg0L7RgtCy0LXRgiDQv9C+0LrQsCBUTFMg0L3QtSDQstGL0L/Rg9GJ0LXQvQogICAgbG9jYXRpb24gLyB7CiAgICAgICAgcmV0dXJuIDIwMCAibW9uaXRvci5rb2Rpay5ydSAtIHdhaXRpbmcgZm9yIFRMUyBjZXJ0XG4iOwogICAgICAgIGFkZF9oZWFkZXIgQ29udGVudC1UeXBlICJ0ZXh0L3BsYWluIjsKICAgIH0KfQoKIyDQktGB0LUg0L/RgNC+0YfQuNC1IEhvc3QtaGVhZGVycyAtINC30LDQutGA0YvRgtGMINCx0LXQtyDQvtGC0LLQtdGC0LAKc2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIGxpc3RlbiBbOjpdOjgwOwogICAgc2VydmVyX25hbWUgXzsKICAgIHJldHVybiA0NDQ7Cn0=
+    permissions: "0644"
+
+  # nginx hardening (server_tokens off, rate-limit zones)
+  - path: /etc/nginx/conf.d/00-hardening.conf
+    encoding: b64
+    content: |
+      c2VydmVyX3Rva2VucyBvZmY7CgojIFJhdGUtbGltaXQ6IDMwIHJlcS9zZWMg0L3QsCBJUCwgYnVy
+      c3QgNjAKbGltaXRfcmVxX3pvbmUgICRiaW5hcnlfcmVtb3RlX2FkZHIgem9uZT1tb25pdG9yX3Jw
+      czoxMG0gcmF0ZT0zMHIvczsKbGltaXRfY29ubl96b25lICRiaW5hcnlfcmVtb3RlX2FkZHIgem9u
+      ZT1tb25pdG9yX2Nvbm46MTBtOwo=
+    permissions: "0644"
+
+  # docker-compose stack
+  - path: /opt/monitor/docker-compose.yml
+    content: |
+      services:
+        prometheus:
+          image: prom/prometheus:v2.55.1
+          container_name: prometheus
+          restart: unless-stopped
+          user: "65534:65534"
+          command:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=30d'
+            - '--web.enable-lifecycle'
+          volumes:
+            - ./prometheus:/etc/prometheus:ro
+            - prometheus_data:/prometheus
+          ports:
+            - "127.0.0.1:9090:9090"
+
+        loki:
+          image: grafana/loki:3.2.1
+          container_name: loki
+          restart: unless-stopped
+          user: "10001:10001"
+          command:
+            - '-config.file=/etc/loki/loki-config.yml'
+          volumes:
+            - ./loki:/etc/loki:ro
+            - loki_data:/loki
+          ports:
+            # 3100 на 0.0.0.0 нужен чтобы promtail с других VM мог push.
+            # Защита — token в nginx-front (см. /api/loki/push location). Прямо на :3100 не светим.
+            - "127.0.0.1:3100:3100"
+
+        alertmanager:
+          image: prom/alertmanager:v0.27.0
+          container_name: alertmanager
+          restart: unless-stopped
+          user: "65534:65534"
+          command:
+            - '--config.file=/etc/alertmanager/config.yml'
+            - '--storage.path=/alertmanager'
+          volumes:
+            - ./alertmanager:/etc/alertmanager:ro
+            - alertmanager_data:/alertmanager
+          ports:
+            - "127.0.0.1:9093:9093"
+
+        blackbox:
+          image: prom/blackbox-exporter:v0.25.0
+          container_name: blackbox
+          restart: unless-stopped
+          command:
+            - '--config.file=/etc/blackbox/blackbox.yml'
+          volumes:
+            - ./blackbox:/etc/blackbox:ro
+          ports:
+            - "127.0.0.1:9115:9115"
+
+        node_exporter:
+          image: prom/node-exporter:v1.8.2
+          container_name: node_exporter
+          restart: unless-stopped
+          pid: host
+          command:
+            - '--path.rootfs=/host'
+            - '--collector.systemd'
+            - '--collector.processes'
+          volumes:
+            - '/:/host:ro,rslave'
+          ports:
+            - "127.0.0.1:9100:9100"
+
+        grafana:
+          image: grafana/grafana:11.3.0
+          container_name: grafana
+          restart: unless-stopped
+          user: "472:472"
+          env_file:
+            - /opt/monitor/secrets.env
+          environment:
+            - GF_SECURITY_ADMIN_USER=admin
+            - GF_SERVER_ROOT_URL=https://monitor.kodik.ru/
+            - GF_USERS_ALLOW_SIGN_UP=false
+            - GF_AUTH_ANONYMOUS_ENABLED=false
+            - GF_ANALYTICS_REPORTING_ENABLED=false
+            - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+          volumes:
+            - ./grafana/provisioning:/etc/grafana/provisioning:ro
+            - grafana_data:/var/lib/grafana
+          ports:
+            - "127.0.0.1:3000:3000"
+
+      volumes:
+        prometheus_data:
+        loki_data:
+        alertmanager_data:
+        grafana_data:
+    permissions: "0644"
+
+  # Prometheus конфиг — scrape targets и alert rules.
+  # Internal IPs из yc snapshot 2026-05-25. Если IP сменится при stop+start —
+  # обновить здесь и `docker compose kill -s HUP prometheus`.
+  - path: /opt/monitor/prometheus/prometheus.yml
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+        external_labels:
+          cluster: kodik-yc
+          region: ru-central1-a
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ['alertmanager:9093']
+
+      rule_files:
+        - /etc/prometheus/alerts.yml
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ['localhost:9090']
+
+        - job_name: node
+          static_configs:
+            - targets: ['node_exporter:9100']
+              labels: { host: 'monitor', role: 'observability' }
+            - targets: ['10.128.0.21:9100']
+              labels: { host: 'relayer-01', role: 'bastion-relayer' }
+            - targets: ['10.128.0.35:9100']
+              labels: { host: 'kodik-verify', role: 'kodik-detect' }
+            - targets: ['10.128.0.14:9100']
+              labels: { host: 'kodik-hosting', role: 'apps-host' }
+            - targets: ['10.128.0.33:9100']
+              labels: { host: 'kodik-hackathon', role: 'hackathon' }
+            - targets: ['10.128.1.9:9100']
+              labels: { host: 'vibekodik-lb', role: 'kodikrouter-lb' }
+            - targets: ['10.128.1.21:9100']
+              labels: { host: 'vibekodik-db', role: 'kodikrouter-db' }
+            - targets: ['10.128.1.13:9100']
+              labels: { host: 'vibekodik-app-01', role: 'kodikrouter-api' }
+            - targets: ['10.128.1.32:9100']
+              labels: { host: 'vibekodik-app-02', role: 'kodikrouter-api' }
+            - targets: ['10.128.1.20:9100']
+              labels: { host: 'vibekodik-frontend', role: 'kodikrouter-frontend' }
+            - targets: ['10.128.1.12:9100']
+              labels: { host: 'kodik-ci', role: 'ci-runner' }
+
+        - job_name: blackbox-https
+          metrics_path: /probe
+          params:
+            module: [http_2xx]
+          static_configs:
+            - targets:
+                - https://api.kodikrouter.ru/
+                - https://kodikrouter.ru/
+                - https://www.kodikrouter.ru/
+                - https://scan.kodik.ru/
+                - https://hackathon.kodik.ru/
+                - https://relayer.vibekodik.ru/
+                - https://proxy.kodikrouter.ru/
+                - https://proxy.kodik.ru/
+                - https://kodik.ru/
+          relabel_configs:
+            - source_labels: [__address__]
+              target_label: __param_target
+            - source_labels: [__param_target]
+              target_label: instance
+            - target_label: __address__
+              replacement: blackbox:9115
+
+        - job_name: blackbox-tls-expiry
+          metrics_path: /probe
+          params:
+            module: [tls_connect]
+          static_configs:
+            - targets:
+                - api.kodikrouter.ru:443
+                - kodikrouter.ru:443
+                - scan.kodik.ru:443
+                - hackathon.kodik.ru:443
+                - relayer.vibekodik.ru:443
+                - proxy.kodikrouter.ru:443
+                - proxy.kodik.ru:443
+                - kodik.ru:443
+                - monitor.kodik.ru:443
+          relabel_configs:
+            - source_labels: [__address__]
+              target_label: __param_target
+            - source_labels: [__param_target]
+              target_label: instance
+            - target_label: __address__
+              replacement: blackbox:9115
+    permissions: "0644"
+
+  - path: /opt/monitor/prometheus/alerts.yml
+    content: |
+      groups:
+        - name: node
+          interval: 30s
+          rules:
+            - alert: NodeDown
+              expr: up{job="node"} == 0
+              for: 2m
+              labels: { severity: critical }
+              annotations:
+                summary: "VM {{ $labels.host }} unreachable"
+                description: "node_exporter не отвечает 2 минуты на {{ $labels.host }} ({{ $labels.instance }})."
+
+            - alert: HighCPU
+              expr: 100 - (avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+              for: 5m
+              labels: { severity: warning }
+              annotations:
+                summary: "{{ $labels.host }}: CPU > 85% / 5 min"
+
+            - alert: HighMemory
+              expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+              for: 5m
+              labels: { severity: warning }
+              annotations:
+                summary: "{{ $labels.host }}: RAM > 90% / 5 min"
+
+            - alert: DiskAlmostFull
+              expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 85
+              for: 10m
+              labels: { severity: warning }
+              annotations:
+                summary: "{{ $labels.host }} {{ $labels.mountpoint }}: диск > 85%"
+
+            - alert: DiskCritical
+              expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 95
+              for: 5m
+              labels: { severity: critical }
+              annotations:
+                summary: "{{ $labels.host }} {{ $labels.mountpoint }}: диск > 95%"
+
+            - alert: SystemdUnitFailed
+              expr: node_systemd_unit_state{state="failed"} == 1
+              for: 5m
+              labels: { severity: warning }
+              annotations:
+                summary: "{{ $labels.host }}: systemd unit {{ $labels.name }} failed"
+
+        - name: endpoints
+          interval: 30s
+          rules:
+            - alert: HTTPSEndpointDown
+              expr: probe_success{job="blackbox-https"} == 0
+              for: 3m
+              labels: { severity: critical }
+              annotations:
+                summary: "{{ $labels.instance }} не отвечает 2xx 3 минуты"
+
+            - alert: TLSExpiringSoon
+              expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+              for: 5m
+              labels: { severity: warning }
+              annotations:
+                summary: "{{ $labels.instance }}: TLS-серт истекает через {{ $value | humanize }} дней"
+
+            - alert: TLSExpiringCritical
+              expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 3
+              for: 5m
+              labels: { severity: critical }
+              annotations:
+                summary: "{{ $labels.instance }}: TLS-серт истекает через {{ $value | humanize }} дней"
+    permissions: "0644"
+
+  - path: /opt/monitor/loki/loki-config.yml
+    content: |
+      auth_enabled: false
+
+      server:
+        http_listen_port: 3100
+        grpc_listen_port: 9096
+        log_level: info
+
+      common:
+        instance_addr: 127.0.0.1
+        path_prefix: /loki
+        storage:
+          filesystem:
+            chunks_directory: /loki/chunks
+            rules_directory: /loki/rules
+        replication_factor: 1
+        ring:
+          kvstore:
+            store: inmemory
+
+      schema_config:
+        configs:
+          - from: 2024-01-01
+            store: tsdb
+            object_store: filesystem
+            schema: v13
+            index:
+              prefix: index_
+              period: 24h
+
+      limits_config:
+        reject_old_samples: true
+        reject_old_samples_max_age: 168h
+        retention_period: 336h  # 14 days
+        max_query_series: 100000
+        ingestion_rate_mb: 16
+        ingestion_burst_size_mb: 32
+
+      compactor:
+        working_directory: /loki/compactor
+        retention_enabled: true
+        delete_request_store: filesystem
+
+      ruler:
+        alertmanager_url: http://alertmanager:9093
+
+      analytics:
+        reporting_enabled: false
+    permissions: "0644"
+
+  - path: /opt/monitor/blackbox/blackbox.yml
+    content: |
+      modules:
+        http_2xx:
+          prober: http
+          timeout: 10s
+          http:
+            valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+            valid_status_codes: [200, 301, 302, 401]
+            follow_redirects: false
+            preferred_ip_protocol: ip4
+        tls_connect:
+          prober: tcp
+          timeout: 10s
+          tcp:
+            tls: true
+            preferred_ip_protocol: ip4
+    permissions: "0644"
+
+  # Alertmanager config. Placeholder bot_token + chat_id=0 — Кристиан подменяет
+  # руками после создания Telegram-бота, потом `docker compose restart alertmanager`.
+  # ⚠️ Alertmanager НЕ читает env-vars из config.yml (только в templates). Поэтому
+  # секреты прямо в YAML, защита — chmod 600 + bind-mount read-only.
+  - path: /opt/monitor/alertmanager/config.yml
+    encoding: b64
+    content: Z2xvYmFsOgogIHJlc29sdmVfdGltZW91dDogNW0KCnRlbXBsYXRlczoKICAtICcvZXRjL2FsZXJ0bWFuYWdlci90ZW1wbGF0ZXMudG1wbCcKCnJvdXRlOgogIHJlY2VpdmVyOiB0ZWxlZ3JhbQogIGdyb3VwX2J5OiBbJ2FsZXJ0bmFtZScsICdob3N0J10KICBncm91cF93YWl0OiAxMHMKICBncm91cF9pbnRlcnZhbDogNW0KICByZXBlYXRfaW50ZXJ2YWw6IDFoCiAgcm91dGVzOgogICAgLSBtYXRjaGVyczogWyBzZXZlcml0eT0iY3JpdGljYWwiIF0KICAgICAgcmVjZWl2ZXI6IHRlbGVncmFtCiAgICAgIGdyb3VwX3dhaXQ6IDBzCiAgICAgIHJlcGVhdF9pbnRlcnZhbDogMzBtCgpyZWNlaXZlcnM6CiAgLSBuYW1lOiB0ZWxlZ3JhbQogICAgdGVsZWdyYW1fY29uZmlnczoKICAgICAgLSBib3RfdG9rZW46ICdSRVBMQUNFX01FX0JPVEZBVEhFUl9UT0tFTicKICAgICAgICBjaGF0X2lkOiAwCiAgICAgICAgcGFyc2VfbW9kZTogSFRNTAogICAgICAgIG1lc3NhZ2U6ICd7eyB0ZW1wbGF0ZSAidGVsZWdyYW0ubWVzc2FnZSIgLiB9fScKICAgICAgICBzZW5kX3Jlc29sdmVkOiB0cnVlCgppbmhpYml0X3J1bGVzOgogIC0gc291cmNlX21hdGNoZXJzOiBbIHNldmVyaXR5PSJjcml0aWNhbCIgXQogICAgdGFyZ2V0X21hdGNoZXJzOiBbIHNldmVyaXR5PSJ3YXJuaW5nIiBdCiAgICBlcXVhbDogWydhbGVydG5hbWUnLCAnaG9zdCdd
+    permissions: "0600"
+
+  # Templates (Go templates с {{ }}, без $-знаков, можно inline)
+  - path: /opt/monitor/alertmanager/templates.tmpl
+    content: |
+      {{ define "telegram.message" }}
+      {{ range .Alerts -}}
+      <b>{{ if eq .Status "firing" }}🔥 {{ .Labels.severity | toUpper }}{{ else }}✅ RESOLVED{{ end }}</b> {{ .Labels.alertname }}
+      <b>Host:</b> {{ .Labels.host }}{{ if .Labels.instance }} ({{ .Labels.instance }}){{ end }}
+      <b>Summary:</b> {{ .Annotations.summary }}
+      {{ if .Annotations.description }}<b>Detail:</b> {{ .Annotations.description }}{{ end }}
+      {{ end }}
+      {{ end }}
+    permissions: "0644"
+
+  # Грейфана provisioning — datasources auto, dashboards импортнём через UI после
+  - path: /opt/monitor/grafana/provisioning/datasources/datasources.yml
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+          editable: false
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki:3100
+          editable: false
+    permissions: "0644"
+
+  - path: /opt/monitor/grafana/provisioning/dashboards/dashboards.yml
+    content: |
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+    permissions: "0644"
+
+  # Grafana admin password — Grafana читает GF_* env-vars нормально через env_file.
+  - path: /opt/monitor/secrets.env
+    content: |
+      # Подменить руками ДО первого `docker compose up grafana`.
+      # Telegram bot_token / chat_id — НЕ здесь, а прямо в /opt/monitor/alertmanager/config.yml
+      # (Alertmanager не читает env-vars в receivers config).
+      GF_SECURITY_ADMIN_PASSWORD=REPLACE_ME_STRONG_PASSWORD
+    permissions: "0600"
+
+  - path: /opt/monitor/README.md
+    content: |
+      # monitor VM (monitor.kodik.ru)
+
+      Stack: Prometheus + Loki + Grafana + Alertmanager + Blackbox (Docker Compose).
+
+      ## Bring-up после cloud-init
+
+      1. Подменить заглушки в /opt/monitor/secrets.env (Telegram + Grafana pwd).
+      2. Поставить A-record `monitor.kodik.ru` → IP этой VM (Selectel UI).
+         Подождать пока DNS пропагандируется (5-10 мин), `dig monitor.kodik.ru`.
+      3. Выпустить TLS-серт:
+            sudo certbot --nginx -d monitor.kodik.ru
+         certbot перепишет /etc/nginx/sites-available/monitor с TLS + редиректом.
+         Если перепишет криво (см. `reference_certbot_nginx_redirect_gotcha.md`) —
+         поправить руками `proxy_pass` к https://127.0.0.1:3000 (Grafana).
+      4. Дозаписать nginx-конфиг (см. /opt/monitor/nginx-final-template.conf):
+         proxy_pass /grafana → :3000, /alertmanager → :9093, /prometheus → :9090.
+         Базовая Basic Auth для /prometheus и /alertmanager (htpasswd).
+      5. Стартовать стек:
+            cd /opt/monitor && sudo docker compose up -d
+      6. Открыть https://monitor.kodik.ru/ — Grafana login (admin / тот, что в secrets.env).
+      7. Импортнуть дашборды через UI:
+         - Node Exporter Full (id 1860)
+         - Loki Dashboard (id 13407)
+         - Blackbox Exporter (id 14928)
+
+      ## Раскладка агентов на другие VM
+      см. tools/provision-agent.sh — заливает node_exporter + promtail systemd-юнитами.
+
+      ## Логи
+      sudo docker compose logs -f --tail=100 prometheus loki grafana alertmanager
+    permissions: "0644"
+
+runcmd:
+  - systemctl restart ssh
+
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 5722/tcp comment 'SSH'
+  - ufw allow 80/tcp comment 'HTTP'
+  - ufw allow 443/tcp comment 'HTTPS'
+  - ufw --force enable
+
+  - systemctl enable --now fail2ban
+
+  # Swap 2G (insurance against Loki ingest bursts on 8G VM)
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - sh -c 'echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+
+  # nginx HTTP-only (stage 1) + acme-challenge dir
+  - mkdir -p /var/www/certbot
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/monitor /etc/nginx/sites-enabled/monitor
+  - nginx -t
+  - systemctl reload nginx
+
+  # wait for any background apt locks
+  - sh -c 'while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 5; done'
+
+  # Docker (official install script — даёт docker engine + compose plugin)
+  - sh -c 'curl -fsSL https://get.docker.com | sh'
+  - systemctl enable --now docker
+  - usermod -aG docker ubuntu
+
+  # Каталоги для bind-mounts (если cloud-init не создал)
+  - mkdir -p /opt/monitor/grafana/dashboards
+  - chown -R root:root /opt/monitor
+  - chmod 600 /opt/monitor/secrets.env
+
+  # НЕ стартуем стек автоматически — Кристиан подменяет secrets.env перед первым up.
+  # (Если стартануть сейчас, alertmanager упадёт на пустых TELEGRAM_*, Grafana поднимется
+  # с admin/admin что небезопасно.)
+  # Используем sh -c чтобы YAML-парсер не интерпретировал двоеточие в строке как ключ
+  # (грабля 2026-05-25 — раннее `echo "Next: edit X" > file` ломала schema validation)
+  - sh -c 'echo "cloud-init OK. See /opt/monitor/README.md for next steps" > /var/log/cloud-init-done.txt'

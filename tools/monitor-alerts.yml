@@ -1,0 +1,70 @@
+groups:
+  - name: node
+    interval: 30s
+    rules:
+      - alert: NodeDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "VM {{ $labels.host }} unreachable"
+          description: "node_exporter не отвечает 2 минуты на {{ $labels.host }} ({{ $labels.instance }})."
+
+      - alert: HighCPU
+        expr: 100 - (avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: CPU > 85% / 5 min"
+
+      - alert: HighMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: RAM > 90% / 5 min"
+
+      - alert: DiskAlmostFull
+        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 85
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }}: диск > 85%"
+
+      - alert: DiskCritical
+        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 95
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }}: диск > 95%"
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host }}: systemd unit {{ $labels.name }} failed"
+
+  - name: endpoints
+    interval: 30s
+    rules:
+      - alert: HTTPSEndpointDown
+        expr: probe_success{job="blackbox-https"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} не отвечает 2xx 3 минуты"
+
+      - alert: TLSExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: '{{ $labels.instance }}: TLS истекает через {{ printf "%.1f" $value }} дней'
+
+      - alert: TLSExpiringCritical
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 3
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: '{{ $labels.instance }}: TLS истекает через {{ printf "%.1f" $value }} дней'
