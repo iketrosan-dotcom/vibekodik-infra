@@ -1,23 +1,28 @@
 #cloud-config
 
-# Cloud-init для VM, на которой будут жить aiscan.kodik.ru и dozor.kodik.ru.
-# Stack: nginx (reverse-proxy) + Node.js 22 LTS + PM2 (process manager) для двух Next.js приложений.
+# Cloud-init для VM kodik-verify — на ней живёт scan.kodik.ru (KodikDetect/hive-detector).
+# Stack: nginx (reverse-proxy) + Node.js 22 LTS + PM2 (process manager) для Next.js-приложения.
+#
+# История: VM изначально поднималась под два домена (aiscan + dozor), но позже
+# договорились оставить только scan.kodik.ru, dozor отменён. Путь workspace
+# /opt/kodik-aiscan/ оставлен legacy-именем — на живой VM его не переименовывали
+# (лишний риск), cloud-init держит то же имя для консистентности с runbook'ом.
 #
 # Что делает при первой загрузке:
 #   1. ubuntu user + SSH-ключ + SSH порт 5722.
 #   2. Ставит nginx, certbot, fail2ban, Node.js 22 LTS, PM2 (глобально), build tooling.
 #   3. nginx hardening: server_tokens off + rate/conn limit зоны.
-#   4. nginx bootstrap-конфиг (HTTP-only, два server_name: verify/dozor → 127.0.0.1:3000/3001).
+#   4. nginx bootstrap-конфиг (HTTP-only, server_name scan.kodik.ru → 127.0.0.1:3000).
 #      Пока Next.js не запущен — nginx ответит 502, но это видимый сигнал, что DNS дошёл.
 #   5. Swap 2 GB (на 4GB VM не критично, но дешёвая страховка при `next build`).
-#   6. /opt/kodik-aiscan и /opt/kodik-dozor — workspace под код.
+#   6. /opt/kodik-aiscan — workspace под код (имя legacy, см. выше).
 #   7. fail2ban (sshd на 5722 + nginx-http-auth).
 #
 # НЕ делает (специально):
-#   - certbot --nginx — отдельный шаг ПОСЛЕ того, как DNS A-записи aiscan.kodik.ru и
-#     dozor.kodik.ru пропагируются. Иначе ACME-challenge сломается и cloud-init
+#   - certbot --nginx — отдельный шаг ПОСЛЕ того, как DNS A-запись scan.kodik.ru
+#     пропагируется. Иначе ACME-challenge сломается и cloud-init
 #     останется в "degraded" состоянии. Команда для запуска позже:
-#       sudo certbot --nginx -d aiscan.kodik.ru -d dozor.kodik.ru \
+#       sudo certbot --nginx -d scan.kodik.ru \
 #         --email k.ketrosan@headframe.io --agree-tos --no-eff-email --redirect --non-interactive
 #   - Не клонирует код Next.js — придёт через git после того, как Кристиан подготовит репо.
 #   - Не настраивает PM2 ecosystem.config.js — настроится под конкретное приложение.
@@ -67,16 +72,15 @@ write_files:
     content: c2VydmVyX3Rva2VucyBvZmY7CmxpbWl0X3JlcV96b25lICAkYmluYXJ5X3JlbW90ZV9hZGRyIHpvbmU9a29kaWtfcnBzOjEwbSByYXRlPTMwci9zOwpsaW1pdF9jb25uX3pvbmUgJGJpbmFyeV9yZW1vdGVfYWRkciB6b25lPWtvZGlrX2Nvbm46MTBtOw==
     permissions: "0644"
 
-  # Bootstrap nginx-конфиг (HTTP-only). Активируется первым. Два server_name:
-  #   aiscan.kodik.ru → proxy_pass http://127.0.0.1:3000   (KodikDetect/hive-detector)
-  #   dozor.kodik.ru  → proxy_pass http://127.0.0.1:3001   (TBD Next.js)
+  # Bootstrap nginx-конфиг (HTTP-only). Активируется первым:
+  #   scan.kodik.ru → proxy_pass http://127.0.0.1:3000   (KodikDetect/hive-detector)
   # Default-блок на :80 → return 444 (закрыть для чужих Host headers).
   # Заголовки Upgrade/Connection — для WebSocket / Next.js HMR.
   # Финальный TLS-конфиг будет создан certbot'ом (`certbot --nginx` сам отредактирует
   # этот файл, добавив listen 443 ssl + редирект 80→443).
   - path: /etc/nginx/sites-available/kodik
     encoding: base64
-    content: IyBhaXNjYW4ua29kaWsucnUg4oCUIHByb3h5IHRvIE5leHQuanMg0L3QsCAxMjcuMC4wLjE6MzAwMCAoS29kaWtEZXRlY3QvaGl2ZS1kZXRlY3RvcikKc2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIGxpc3RlbiBbOjpdOjgwOwogICAgc2VydmVyX25hbWUgYWlzY2FuLmtvZGlrLnJ1OwoKICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCAzMHM7CiAgICBwcm94eV9zZW5kX3RpbWVvdXQgICAgNjBzOwogICAgcHJveHlfcmVhZF90aW1lb3V0ICAgIDYwczsKCiAgICBsb2NhdGlvbiAvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjMwMDA7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgVXBncmFkZSAgICAgICAgICAgJGh0dHBfdXBncmFkZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gICAgICAgICJ1cGdyYWRlIjsKICAgIH0KfQoKIyBkb3pvci5rb2Rpay5ydSDigJQgcHJveHkgdG8gTmV4dC5qcyDQvdCwIDEyNy4wLjAuMTozMDAxCnNlcnZlciB7CiAgICBsaXN0ZW4gODA7CiAgICBsaXN0ZW4gWzo6XTo4MDsKICAgIHNlcnZlcl9uYW1lIGRvem9yLmtvZGlrLnJ1OwoKICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCAzMHM7CiAgICBwcm94eV9zZW5kX3RpbWVvdXQgICAgNjBzOwogICAgcHJveHlfcmVhZF90aW1lb3V0ICAgIDYwczsKCiAgICBsb2NhdGlvbiAvIHsKICAgICAgICBsaW1pdF9yZXEgIHpvbmU9a29kaWtfcnBzICBidXJzdD02MCBub2RlbGF5OwogICAgICAgIGxpbWl0X2Nvbm4ga29kaWtfY29ubiA1MDsKCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjMwMDE7CiAgICAgICAgcHJveHlfaHR0cF92ZXJzaW9uIDEuMTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIEhvc3QgICAgICAgICAgICAgICRob3N0OwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1SZWFsLUlQICAgICAgICAgJHJlbW90ZV9hZGRyOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgWC1Gb3J3YXJkZWQtRm9yICAgJHByb3h5X2FkZF94X2ZvcndhcmRlZF9mb3I7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Qcm90byAkc2NoZW1lOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgVXBncmFkZSAgICAgICAgICAgJGh0dHBfdXBncmFkZTsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIENvbm5lY3Rpb24gICAgICAgICJ1cGdyYWRlIjsKICAgIH0KfQoKIyBkZWZhdWx0IOKAlCDQt9Cw0LrRgNGL0YLRjCDQtNC70Y8g0YfRg9C20LjRhSBIb3N0IGhlYWRlcnMgLyDQv9GA0Y/QvNC+0LPQviBJUApzZXJ2ZXIgewogICAgbGlzdGVuIDgwIGRlZmF1bHRfc2VydmVyOwogICAgbGlzdGVuIFs6Ol06ODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBzZXJ2ZXJfbmFtZSBfOwogICAgcmV0dXJuIDQ0NDsKfQ==
+    content: IyBzY2FuLmtvZGlrLnJ1IOKAlCBwcm94eSB0byBOZXh0LmpzINC90LAgMTI3LjAuMC4xOjMwMDAgKEtvZGlrRGV0ZWN0L2hpdmUtZGV0ZWN0b3IpCnNlcnZlciB7CiAgICBsaXN0ZW4gODA7CiAgICBsaXN0ZW4gWzo6XTo4MDsKICAgIHNlcnZlcl9uYW1lIHNjYW4ua29kaWsucnU7CgogICAgcHJveHlfY29ubmVjdF90aW1lb3V0IDMwczsKICAgIHByb3h5X3NlbmRfdGltZW91dCAgICA2MHM7CiAgICBwcm94eV9yZWFkX3RpbWVvdXQgICAgNjBzOwoKICAgIGxvY2F0aW9uIC8gewogICAgICAgIGxpbWl0X3JlcSAgem9uZT1rb2Rpa19ycHMgIGJ1cnN0PTYwIG5vZGVsYXk7CiAgICAgICAgbGltaXRfY29ubiBrb2Rpa19jb25uIDUwOwoKICAgICAgICBwcm94eV9wYXNzIGh0dHA6Ly8xMjcuMC4wLjE6MzAwMDsKICAgICAgICBwcm94eV9odHRwX3ZlcnNpb24gMS4xOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgSG9zdCAgICAgICAgICAgICAgJGhvc3Q7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLVJlYWwtSVAgICAgICAgICAkcmVtb3RlX2FkZHI7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBYLUZvcndhcmRlZC1Gb3IgICAkcHJveHlfYWRkX3hfZm9yd2FyZGVkX2ZvcjsKICAgICAgICBwcm94eV9zZXRfaGVhZGVyIFgtRm9yd2FyZGVkLVByb3RvICRzY2hlbWU7CiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBVcGdyYWRlICAgICAgICAgICAkaHR0cF91cGdyYWRlOwogICAgICAgIHByb3h5X3NldF9oZWFkZXIgQ29ubmVjdGlvbiAgICAgICAgInVwZ3JhZGUiOwogICAgfQp9CgojIGRlZmF1bHQg4oCUINC30LDQutGA0YvRgtGMINC00LvRjyDRh9GD0LbQuNGFIEhvc3QgaGVhZGVycyAvINC/0YDRj9C80L7Qs9C+IElQCnNlcnZlciB7CiAgICBsaXN0ZW4gODAgZGVmYXVsdF9zZXJ2ZXI7CiAgICBsaXN0ZW4gWzo6XTo4MCBkZWZhdWx0X3NlcnZlcjsKICAgIHNlcnZlcl9uYW1lIF87CiAgICByZXR1cm4gNDQ0Owp9Cg==
     permissions: "0644"
 
   # fail2ban: sshd на 5722 + nginx-http-auth (тот же файл, что у relayer-01)
@@ -110,12 +114,12 @@ runcmd:
   # PM2 глобально (process manager для Next.js — Кристиан попросил pm2)
   - npm install -g pm2
 
-  # Workspace директории под два сайта
-  - mkdir -p /opt/kodik-aiscan /opt/kodik-dozor
-  - chown ubuntu:ubuntu /opt/kodik-aiscan /opt/kodik-dozor
+  # Workspace директория под код (имя legacy — см. шапку файла)
+  - mkdir -p /opt/kodik-aiscan
+  - chown ubuntu:ubuntu /opt/kodik-aiscan
 
   # nginx: убираем default-сайт, поднимаем наш конфиг (HTTP-only пока).
-  # nginx ответит 502 на verify/dozor пока Next.js не запущен — это нормально.
+  # nginx ответит 502 на scan.kodik.ru пока Next.js не запущен — это нормально.
   - rm -f /etc/nginx/sites-enabled/default
   - ln -sf /etc/nginx/sites-available/kodik /etc/nginx/sites-enabled/kodik
   - nginx -t
