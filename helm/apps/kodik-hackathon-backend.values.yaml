@@ -1,0 +1,32 @@
+# hackathon-backend (FastAPI). ns hackathon. Внутренний (без ingress) — фронт ходит на
+# http://hackathon-backend:8000 через next-rewrite. БД/Redis — на VM kodik-hackathon
+# (DATABASE_URL/REDIS_URL в Vault указывают на kodik-hackathon.ru-central1.internal).
+# Бэкенд сам гонит `alembic upgrade head` на старте (идемпотентно к существующей БД).
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/hackathon-backend
+  tag: dev-e152ed6
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8000
+service:
+  port: 8000 # фронт обращается http://hackathon-backend:8000
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 768Mi }
+
+probes:
+  enabled: true
+  path: /api/health
+  initialDelaySeconds: 20
+  periodSeconds: 15
+
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/hackathon # DATABASE_URL/REDIS_URL/JWT_SECRET/SENDSAY_*/POSTGRES_*
+
+serviceAccount:
+  create: true

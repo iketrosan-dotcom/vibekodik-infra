@@ -1,0 +1,31 @@
+# hackathon-frontend (Next.js 15). ns hackathon. Ingress hackathon.kodik.ru.
+# /api/* проксируется на бэкенд через next-rewrite (runtime env API_TARGET).
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/hackathon-frontend
+  tag: dev-c669483
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 3000
+
+env:
+  API_TARGET: http://hackathon-backend:8000 # Service бэкенда в ns hackathon
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 512Mi }
+
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+ingress:
+  enabled: true
+  host: hackathon.kodik.ru
+  tlsSecretName: hackathon-kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+
+serviceAccount:
+  create: true

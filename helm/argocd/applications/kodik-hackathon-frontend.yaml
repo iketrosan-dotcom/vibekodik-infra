@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodik-hackathon-frontend
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: app=cr.yandex/crp7738saq8ngg8ad5tm/hackathon-frontend
+    argocd-image-updater.argoproj.io/app.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/app.allow-tags: regexp:^dev-[0-9a-f]{7}$
+    argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hackathon
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: hackathon-frontend
+        valueFiles:
+          - $values/helm/apps/kodik-hackathon-frontend.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
