@@ -1,0 +1,50 @@
+# Неймспейсы под платформенные компоненты. kubectl apply -f этим файлом ПЕРВЫМ.
+# Логическая изоляция + место для NetworkPolicy позже.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    kodik.ru/layer: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+  labels:
+    kodik.ru/layer: workload

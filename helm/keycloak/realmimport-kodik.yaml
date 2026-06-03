@@ -1,0 +1,125 @@
+# KeycloakRealmImport — декларативно создаёт realm 'kodik' с клиентами и группами.
+# Оператор применяет импорт через Job при старте. Идемпотентно по realm name.
+#
+# ⚠️ Секреты клиентов (vault/grafana) тут — ПЛЕЙСХОЛДЕРЫ. После импорта:
+#   - либо задай реальные secret в Keycloak UI (Clients → <client> → Credentials → Regenerate),
+#     забери значение и положи в Lockbox/Vault;
+#   - либо подставь сильные secret сюда ПЕРЕД apply (но тогда файл с секретами не коммить).
+# Группа platform-admins → маппится в Vault policy kodik-admin (см. configure-vault.sh)
+# и в Grafana admin (role mapping в client grafana).
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: kodik
+  namespace: keycloak
+spec:
+  keycloakCRName: kodik
+  realm:
+    realm: kodik
+    enabled: true
+    displayName: Kodik SSO
+
+    groups:
+      - name: platform-admins
+      - name: developers
+
+    # ⚠️ ГРАБЛЯ: указание clientScopes в realm-import ЗАМЕНЯЕТ собой дефолтные
+    # client-scopes, которые Keycloak обычно сидит сам (profile, email, roles,
+    # web-origins...). Поэтому здесь надо перечислить ВСЕ нужные scope с мапперами,
+    # иначе клиенты не смогут запросить profile/email → Keycloak отбивает auth-запрос
+    # "Invalid scopes" и редиректит без code (Vault UI: "callback did not supply all
+    # required parameters"). Определяем groups + email + profile.
+    clientScopes:
+      - name: groups
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              claim.name: groups
+              full.path: "false"
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+      - name: email
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: email
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: email
+              claim.name: email
+              jsonType.label: String
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+          - name: email verified
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: emailVerified
+              claim.name: email_verified
+              jsonType.label: boolean
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+      - name: profile
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: username
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: username
+              claim.name: preferred_username
+              jsonType.label: String
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+          - name: full name
+            protocol: openid-connect
+            protocolMapper: oidc-full-name-mapper
+            config:
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+
+    clients:
+      # --- Vault (confidential, OIDC auth + UI) ---
+      - clientId: vault
+        name: HashiCorp Vault
+        protocol: openid-connect
+        publicClient: false
+        secret: __VAULT_CLIENT_SECRET__ # ПЛЕЙСХОЛДЕР
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        redirectUris:
+          - https://vault.kodik.ru/ui/vault/auth/oidc/oidc/callback
+          - https://vault.kodik.ru/oidc/callback
+          - http://localhost:8250/oidc/callback
+        # openid НЕ указывать — это спец-scope OIDC, не назначаемый client-scope.
+        # Vault'у нужны только sub (всегда) + groups; роль OIDC запрашивает oidc_scopes=groups.
+        defaultClientScopes:
+          - groups
+
+      # --- Grafana (confidential, generic OAuth) ---
+      - clientId: grafana
+        name: Grafana
+        protocol: openid-connect
+        publicClient: false
+        secret: __GRAFANA_CLIENT_SECRET__ # ПЛЕЙСХОЛДЕР
+        standardFlowEnabled: true
+        redirectUris:
+          - https://grafana.kodik.ru/login/generic_oauth
+        defaultClientScopes:
+          - groups
+          - email
+          - profile

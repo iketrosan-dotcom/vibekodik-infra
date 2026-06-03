@@ -1,0 +1,37 @@
+# cert-manager — выпускает/обновляет TLS-сертификаты Let's Encrypt для Ingress.
+# Чарт: jetstack/cert-manager
+#
+# helm repo add jetstack https://charts.jetstack.io
+# helm upgrade --install cert-manager jetstack/cert-manager \
+#   -n cert-manager --create-namespace \
+#   -f cert-manager-values.yaml
+#
+# crds.enabled=true — чарт сам ставит CRD (раньше это был installCRDs).
+
+crds:
+  enabled: true
+  keep: true
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# ВАЖНО для HTTP-01: cert-manager должен резолвить публичный домен через
+# внешние DNS, а не внутрикластерный CoreDNS (иначе self-check ACME challenge падает).
+dns01RecursiveNameservers: "1.1.1.1:53,8.8.8.8:53"
+dns01RecursiveNameserversOnly: true
+
+nodeSelector:
+  workload: general
+
+webhook:
+  nodeSelector:
+    workload: general
+cainjector:
+  nodeSelector:
+    workload: general

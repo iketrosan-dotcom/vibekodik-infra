@@ -1,0 +1,112 @@
+# Дефолты generic-чарта. Переопределяются per-service values (../kodikrouter-api.values.yaml и т.д.).
+
+# Полное имя релиза. Если пусто — берётся из .Release.Name.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # repository задаётся per-service: cr.yandex/<registry-id>/<service>
+  repository: ""
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+# Порт контейнера + сервиса.
+containerPort: 8000
+service:
+  port: 80
+
+# Команда/аргументы (например uvicorn для FastAPI). Пусто — образ решает сам.
+args: []
+
+# Обычные (несекретные) env.
+env: {}
+
+# Размещение. По умолчанию general NG. Для kodikrouter-api — kodikrouter-api NG + toleration.
+nodeSelector:
+  workload: general
+tolerations: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# --- Probes ---
+probes:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  # startupProbe для тяжёлого cold-start (ML-веса у API ~30-60с, next-server).
+  # Пока startup не прошёл — liveness/readiness не считаются (под не убивается).
+  startup:
+    enabled: false
+    failureThreshold: 30 # ×periodSeconds = бюджет на старт
+    periodSeconds: 5
+
+# --- Ingress ---
+ingress:
+  enabled: false
+  host: ""
+  tlsSecretName: ""
+  clusterIssuer: letsencrypt-prod
+  annotations: {}
+  path: /
+  pathType: Prefix
+
+# --- HPA ---
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# --- Секреты через ESO (Vault KV или Lockbox) ---
+# Рендерит ExternalSecret, который тянет ВЕСЬ payload секрета в k8s Secret
+# <fullname>-env; Deployment грузит его через envFrom.
+#   storeName/storeKind — какой SecretStore использовать:
+#     Vault (целевое для приложений):  storeName=vault-kv, storeKind=ClusterSecretStore
+#     Lockbox (legacy/bootstrap):       storeName=yc-lockbox, storeKind=ClusterSecretStore
+#   remoteKey — путь/ID секрета в сторе:
+#     Vault KV:  "kodik/kodikrouter-api"
+#     Lockbox:   "<lockbox-secret-id>"
+#   lockboxSecretId — DEPRECATED-алиас для remoteKey (обратная совместимость старых values).
+externalSecret:
+  enabled: false
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: ""
+  lockboxSecretId: "" # legacy: если задан и remoteKey пуст — используется как remoteKey
+  refreshInterval: 1h
+
+# ServiceAccount (для Vault kubernetes-auth и pull из YCR через nodes-SA).
+serviceAccount:
+  create: true
+  name: ""
+
+# Доп. под-аннотации (например, для rollout по изменению конфига).
+podAnnotations: {}
+
+# --- initContainers (free-form список) ---
+# Для kodikrouter-api: S3-sync ML-весов (2.4 GB) в emptyDir-том перед стартом.
+# Пример в ../kodikrouter-api.values.yaml.
+initContainers: []
+
+# --- Тома + монтирования (free-form) ---
+# emptyDir для ML-весов: volumes:[{name:ml-weights,emptyDir:{sizeLimit:4Gi}}]
+# + volumeMounts:[{name:ml-weights,mountPath:/weights,readOnly:true}].
+volumes: []
+volumeMounts: []
+
+# --- PodDisruptionBudget ---
+# Для stateful-ish / prod-сервисов держим минимум 1 живой под при drain/rollout.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Доп. переменные окружения из готовых k8s Secret/ConfigMap (free-form envFrom).
+extraEnvFrom: []

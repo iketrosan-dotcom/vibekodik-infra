@@ -1,0 +1,91 @@
+# ==============================================================================
+# HashiCorp Vault — YC-форк чарта с KMS auto-unseal.
+# Чарт: oci://cr.yandex/yc-marketplace/yandex-cloud/vault/chart/vault  (0.28.1+yckms)
+# Образ: cr.yandex/yc-marketplace/.../vault:1.17.2_yckms (Vault 1.17.2 + seal yandexcloudkms).
+#
+# Установка (см. RUNBOOK Phase F): config рендерится при install с подстановкой
+# PG-пароля/FQDN/KMS-key-id и передаётся через --set-string server.ha.config=...
+#   helm upgrade --install vault \
+#     oci://cr.yandex/yc-marketplace/yandex-cloud/vault/chart/vault --version 0.28.1+yckms \
+#     -n vault -f values-vault.yaml \
+#     --set yandexKmsKeyId=<key> \
+#     --set-file yandexKmsAuthJson=<authorized-key.json> \
+#     --set-string server.ha.config="<rendered HCL>"
+#
+# ВАЖНО: seal "yandexcloudkms" ДОЛЖЕН быть в server.ha.config — при override config
+# дефолтный seal чарта теряется. Поэтому он включён в config ниже и в рендере RUNBOOK'а.
+# yandexKmsAuthJson монтируется чартом как secret kms-creds → /vault/userconfig/kms-creds/credentials.json.
+# ==============================================================================
+
+global:
+  tlsDisable: true # TLS терминируется на ingress-nginx (vault.kodik.ru). Внутрикластерно — HTTP.
+
+injector:
+  enabled: false # секреты приложений — через ESO/VSO, не agent-injector.
+
+server:
+  # extraVolumes монтируются в /vault/userconfig/<name>/. kms-creds — дефолт чарта
+  # (authorized-key для KMS-seal); yc-ca — YC root CA для TLS Vault→PostgreSQL.
+  extraVolumes:
+    - type: secret
+      name: kms-creds
+    - type: configMap
+      name: yc-ca
+
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: false # storage = внешний PostgreSQL, не raft.
+
+    # ⚠️ connection_url содержит пароль PG → попадает в ConfigMap. При install
+    # рендерится через --set-string из ротированного Lockbox-секрета 'vault'.
+    # ha_enabled=true → backend сам выбирает active/standby через vault_ha_locks.
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable     = 1
+        address         = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+
+      storage "postgresql" {
+        connection_url = "postgres://vault:__PG_PASSWORD__@__PG_FQDN__:6432/vault?sslmode=verify-full&sslrootcert=/vault/userconfig/yc-ca/CA.pem"
+        ha_enabled     = "true"
+        table          = "vault_kv_store"
+        ha_table       = "vault_ha_locks"
+      }
+
+      service_registration "kubernetes" {}
+
+      seal "yandexcloudkms" {
+        kms_key_id               = "__KMS_KEY_ID__"
+        service_account_key_file = "/vault/userconfig/kms-creds/credentials.json"
+      }
+
+      max_lease_ttl     = "768h"
+      default_lease_ttl = "168h"
+
+  dataStorage:
+    enabled: false # данные в PostgreSQL, PVC не нужен.
+
+  auditStorage:
+    enabled: true
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  nodeSelector:
+    workload: general
+
+ui:
+  enabled: true
+  serviceType: ClusterIP
+
+# yandexKmsKeyId / yandexKmsAuthJson — через --set / --set-file при install.

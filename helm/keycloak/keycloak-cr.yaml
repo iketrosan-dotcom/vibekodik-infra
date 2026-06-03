@@ -1,0 +1,57 @@
+# Keycloak CR (официальный оператор k8s.keycloak.org/v2alpha1).
+# Оператор + CRD ставятся ДО этого манифеста (см. README.md).
+#
+# DB — Managed PostgreSQL (база keycloak). TLS до PG: sslmode=require (шифрование без
+# проверки CA). Хардненинг до verify-full — см. примечание в README (нужен CA в подах).
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: kodik
+  namespace: keycloak
+spec:
+  instances: 2
+
+  db:
+    vendor: postgres
+    # Полный JDBC URL — чтобы добавить sslmode (YC managed PG требует TLS).
+    # __PG_FQDN__ заменить на terraform output postgresql_fqdn. 6432 — пулер.
+    url: jdbc:postgresql://rc1a-ka4i9e8p85mlbv8n.mdb.yandexcloud.net:6432/keycloak?sslmode=require
+    usernameSecret:
+      name: keycloak-db
+      key: username
+    passwordSecret:
+      name: keycloak-db
+      key: password
+
+  # TLS терминируется на ingress-nginx → Keycloak работает по HTTP за прокси.
+  http:
+    httpEnabled: true
+  proxy:
+    headers: xforwarded
+
+  hostname:
+    hostname: https://sso.kodik.ru
+
+  # Bootstrap-админ для первого входа (Secret синкает ESO).
+  bootstrapAdmin:
+    user:
+      secret: keycloak-bootstrap-admin
+
+  # Свой Ingress (ingress-vault-style) — операторный отключаем, чтобы повесить
+  # cert-manager аннотацию и TLS-терминацию на nginx.
+  ingress:
+    enabled: false
+
+  # Keycloak — на general NG.
+  unsupported:
+    podTemplate:
+      spec:
+        nodeSelector:
+          workload: general
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi

@@ -1,0 +1,39 @@
+# ClusterIssuer'ы Let's Encrypt. HTTP-01 через ingress-nginx — проще DNS-01,
+# т.к. у Selectel нет нативного cert-manager webhook'а, а домены и так указывают
+# на IP NLB ingress-nginx.
+#
+# Применять ПОСЛЕ установки cert-manager И ingress-nginx (HTTP-01 solver идёт
+# через ingress class nginx).
+#
+# staging — для отладки (его сертификаты не доверенные, но без rate-limit'ов LE).
+# Сначала проверь staging, убедись что Certificate стал Ready, потом переключай
+# Ingress на prod-issuer.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: k.ketrosan@headframe.io
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: k.ketrosan@headframe.io
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx

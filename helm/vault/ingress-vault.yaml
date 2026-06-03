@@ -1,0 +1,32 @@
+# Ingress для Vault UI/API на vault.kodik.ru. TLS терминируется здесь
+# (cert-manager letsencrypt-prod), внутрь — HTTP на 8200 (tls_disable=1).
+#
+# DNS: A-запись vault.kodik.ru → IP NLB ingress-nginx (Selectel DNS, вручную).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault
+  namespace: vault
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Vault API — длинные стриминг-запросы; не резать таймаутами агрессивно.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [vault.kodik.ru]
+      secretName: vault-kodik-ru-tls
+  rules:
+    - host: vault.kodik.ru
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # Имя active-сервиса Vault. У HA-чарта это <release>-active,
+                # который указывает только на active-под (не на standby).
+                name: vault-active
+                port:
+                  number: 8200

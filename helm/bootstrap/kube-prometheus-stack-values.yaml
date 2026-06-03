@@ -1,0 +1,87 @@
+# kube-prometheus-stack — Prometheus + Alertmanager + Grafana + node/kube метрики.
+# Заменяет self-hosted monitor.kodik.ru (см. память kodik-monitoring-stack).
+# Чарт: prometheus-community/kube-prometheus-stack
+#
+# helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+# helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#   -n monitoring --create-namespace \
+#   -f kube-prometheus-stack-values.yaml
+#
+# Loki ставится отдельно (grafana/loki) + promtail; здесь только метрики+дашборды.
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    # PVC на network-ssd под TSDB.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+    # Подхватывать ServiceMonitor/PodMonitor из ВСЕХ ns, не только своих.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        memory: 3Gi
+    nodeSelector:
+      workload: general
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      workload: general
+  # TODO telegram: Lockbox-секрет telegram-alertmanager пока пуст. Когда появятся
+  # bot_token + chat_id — залить в Lockbox, синкнуть ESO в secret, смонтировать через
+  # alertmanagerSpec.secrets и задать config.receivers[].telegram_configs. Пока — default
+  # receiver чарта (watchdog/null), чтобы alertmanager поднялся без отсутствующего секрета.
+
+grafana:
+  adminPassword: "" # пусто → чарт сгенерит; лучше задать через ExternalSecret
+  defaultDashboardsEnabled: true
+  nodeSelector:
+    workload: general
+  persistence:
+    enabled: true
+    size: 5Gi
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - grafana.kodik.ru
+    tls:
+      - secretName: grafana-kodik-ru-tls
+        hosts:
+          - grafana.kodik.ru
+  # SSO через Keycloak (OIDC). Заполнить после поднятия Keycloak (realm kodik,
+  # client grafana). Секрет client_secret — через ExternalSecret из Lockbox.
+  grafana.ini:
+    server:
+      root_url: https://grafana.kodik.ru
+    auth.generic_oauth:
+      enabled: true
+      name: Keycloak
+      client_id: grafana
+      allow_sign_up: true
+      scopes: "openid email profile groups"
+      auth_url: https://sso.kodik.ru/realms/kodik/protocol/openid-connect/auth
+      token_url: https://sso.kodik.ru/realms/kodik/protocol/openid-connect/token
+      api_url: https://sso.kodik.ru/realms/kodik/protocol/openid-connect/userinfo
+      # client_secret — через env GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET (--set при install).
+      # Маппинг ролей по группе Keycloak: platform-admins → полный Grafana-admin, остальные → Viewer.
+      role_attribute_path: "contains(groups[*], 'platform-admins') && 'GrafanaAdmin' || 'Viewer'"
+      allow_assign_grafana_admin: true
+
+# Узлы-метрики и kube-state ставятся дефолтно.
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true

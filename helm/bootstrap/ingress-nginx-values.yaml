@@ -1,0 +1,64 @@
+# ingress-nginx — L7 ingress за YC NLB (L4). Единая точка входа 80/443.
+# Чарт: ingress-nginx/ingress-nginx
+#
+# helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+# helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+#   -n ingress-nginx --create-namespace \
+#   -f ingress-nginx-values.yaml
+#
+# Service type=LoadBalancer → YC создаёт внешний NLB (external по умолчанию).
+# externalTrafficPolicy: Local — сохраняет реальный client IP (важно для rate-limit
+# и логов; иначе видно только IP ноды). Требует, чтобы под контроллера был на той
+# ноде, куда NLB шлёт трафик — DaemonSet/несколько реплик это покрывают.
+
+controller:
+  replicaCount: 2
+
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+    annotations:
+      # external — по умолчанию; оставлено явно для читаемости.
+      yandex.cloud/load-balancer-type: external
+    # На этапе миграции — ephemeral IP (план Б: статика vibekodik-lb переезжает
+    # сюда в Phase 8). Когда освободишь static IP — раскомментируй и впиши:
+    # loadBalancerIP: "111.88.250.108"
+
+  config:
+    # Берём реальный client IP из NLB. use-forwarded-headers только если NLB/проксей
+    # перед нами добавляет X-Forwarded-For; YC NLB L4 — нет, поэтому false.
+    use-forwarded-headers: "false"
+    # KodikRouter: чат с base64-картинками — большие тела. Совпадает с
+    # MAX_REQUEST_BODY_BYTES бэкенда (см. память kodikrouter-max-request-body).
+    proxy-body-size: "32m"
+    # OpenRouter шлёт крупные ответ-хедеры (см. do-proxy-buffer-size-gotcha).
+    proxy-buffer-size: "32k"
+    ssl-redirect: "true"
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  nodeSelector:
+    workload: general
+
+  # Anti-affinity: две реплики на разных нодах — переживаем выпадение одной.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+                app.kubernetes.io/component: controller
+            topologyKey: kubernetes.io/hostname

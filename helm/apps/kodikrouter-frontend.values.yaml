@@ -1,0 +1,40 @@
+# KodikRouter Frontend (Next.js). general NG.
+#   helm upgrade --install kodikrouter-frontend ./charts/app -n apps -f kodikrouter-frontend.values.yaml
+
+image:
+  repository: cr.yandex/__REGISTRY_ID__/kodikrouter-frontend
+  tag: latest
+
+replicaCount: 2
+containerPort: 3000
+
+env:
+  # Next.js обращается к API через публичный домен.
+  NEXT_PUBLIC_API_URL: https://api.kodikrouter.ru
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+ingress:
+  enabled: true
+  host: kodikrouter.ru
+  tlsSecretName: kodikrouter-ru-tls
+  clusterIssuer: letsencrypt-prod
+
+# Фронту обычно секреты не нужны; если нужны build-time/runtime — включить.
+externalSecret:
+  enabled: false
+  lockboxSecretId: __LOCKBOX_KODIKROUTER_FRONTEND_ID__
+
+serviceAccount:
+  create: true

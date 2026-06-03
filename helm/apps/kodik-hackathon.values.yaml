@@ -1,0 +1,44 @@
+# kodik-hackathon (hackathon.kodik.ru). Next.js 15 + FastAPI.
+#   helm upgrade --install kodik-hackathon ./charts/app -n apps -f kodik-hackathon.values.yaml
+#
+# ⚠️ Зависимости: на VM сервис жил в docker compose с СОБСТВЕННЫМИ postgres+redis.
+# В кубере эти зависимости НЕ покрыты этим чартом. Варианты:
+#   (а) отдельный Managed PostgreSQL/Redis (добавить в terraform по аналогии);
+#   (б) in-cluster postgres/redis (StatefulSet) — ок для не-prod hackathon-нагрузки.
+# DB-коннект и пароли — через Lockbox-секрет kodik-hackathon (ADMIN_TOKEN там же,
+# см. память reference_kodik_hackathon_runbook). Этот values описывает только web/api.
+
+image:
+  repository: cr.yandex/__REGISTRY_ID__/kodik-hackathon
+  tag: latest
+
+replicaCount: 1 # не-prod, hackathon
+containerPort: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 768Mi
+
+probes:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 15
+  periodSeconds: 15
+
+ingress:
+  enabled: true
+  host: hackathon.kodik.ru
+  tlsSecretName: hackathon-kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/hackathon # Vault KV: kv/data/apps/hackathon (DB creds + ADMIN_TOKEN)
+
+serviceAccount:
+  create: true

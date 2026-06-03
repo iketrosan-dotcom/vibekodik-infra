@@ -1,0 +1,40 @@
+# KodikDetect (scan.kodik.ru). Next.js. Детекторы ходят во внешние Hive/Sapling API.
+#   helm upgrade --install kodikdetect ./charts/app -n apps -f kodikdetect.values.yaml
+#
+# Lockbox-секрет kodikdetect должен содержать HIVE_API_KEY (+ SAPLING_* опц.)
+# — см. память reference_aiscan_api_keys.
+
+image:
+  repository: cr.yandex/__REGISTRY_ID__/kodikdetect
+  tag: latest
+
+replicaCount: 2
+containerPort: 3000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+ingress:
+  enabled: true
+  host: scan.kodik.ru
+  tlsSecretName: scan-kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/kodikdetect # Vault KV: kv/data/apps/kodikdetect (HIVE_API_KEY + SAPLING_*)
+
+serviceAccount:
+  create: true
