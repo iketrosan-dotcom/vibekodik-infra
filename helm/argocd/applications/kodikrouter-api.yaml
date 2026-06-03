@@ -1,0 +1,37 @@
+# ArgoCD Application: kodikrouter-api (api.kodikrouter.ru).
+# Стратегия strangler: коннект к СУЩЕСТВУЮЩЕМУ vibekodik-db (MySQL+Redis) — без миграции данных.
+# DB_HOST/REDIS_URL в Vault-секрете указывают на vibekodik-db.ru-central1.internal.
+# SG vibekodik-db открыт для k8s-nodes (3306/6379). Alembic не нужен (БД уже на head).
+# Dedicated NG (taint) + ML-веса через initContainer (S3) — см. values.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodikrouter-api
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: app=cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-api
+    argocd-image-updater.argoproj.io/app.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/app.allow-tags: regexp:^dev-[0-9a-f]{7}$
+    argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodikrouter
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodikrouter-api
+        valueFiles:
+          - $values/helm/apps/kodikrouter-api.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

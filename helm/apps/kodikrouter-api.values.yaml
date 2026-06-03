@@ -8,8 +8,8 @@
 # Источники архитектурных решений: k8s-apps-migration-architecture.md §1.1, §2.5, §2.6.
 
 image:
-  repository: cr.yandex/__REGISTRY_ID__/kodikrouter-api
-  tag: latest
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-api
+  tag: dev-cf95533 # управляется ArgoCD Image Updater
 
 replicaCount: 2
 containerPort: 8000
