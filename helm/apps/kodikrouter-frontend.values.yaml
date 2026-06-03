@@ -28,6 +28,8 @@ probes:
 ingress:
   enabled: true
   host: kodikrouter.ru
+  extraHosts:
+    - www.kodikrouter.ru
   tlsSecretName: kodikrouter-ru-tls
   clusterIssuer: letsencrypt-prod
 

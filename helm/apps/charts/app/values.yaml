@@ -52,6 +52,7 @@ probes:
 ingress:
   enabled: false
   host: ""
+  extraHosts: [] # доп. хосты на тот же backend + в TLS SAN (напр. www.kodikrouter.ru)
   tlsSecretName: ""
   clusterIssuer: letsencrypt-prod
   annotations: {}
