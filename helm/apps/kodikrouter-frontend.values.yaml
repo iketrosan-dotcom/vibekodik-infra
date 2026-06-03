@@ -2,8 +2,8 @@
 #   helm upgrade --install kodikrouter-frontend ./charts/app -n apps -f kodikrouter-frontend.values.yaml
 
 image:
-  repository: cr.yandex/__REGISTRY_ID__/kodikrouter-frontend
-  tag: latest
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-frontend
+  tag: dev-5bac7ec # управляется ArgoCD Image Updater
 
 replicaCount: 2
 containerPort: 3000
