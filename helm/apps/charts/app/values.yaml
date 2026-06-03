@@ -82,7 +82,7 @@ externalSecret:
   storeKind: ClusterSecretStore
   remoteKey: ""
   lockboxSecretId: "" # legacy: если задан и remoteKey пуст — используется как remoteKey
-  refreshInterval: 1h
+  refreshInterval: 1m # Vault-изменения долетают в k8s Secret за ~минуту (+ Reloader рестартит под)
 
 # ServiceAccount (для Vault kubernetes-auth и pull из YCR через nodes-SA).
 serviceAccount:
