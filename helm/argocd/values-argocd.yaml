@@ -1,0 +1,54 @@
+# ArgoCD — GitOps CD для Kodik. SSO через Keycloak (realm kodik).
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm upgrade --install argocd argo/argo-cd -n argocd --create-namespace \
+#     -f values-argocd.yaml \
+#     --set-string configs.secret.extra.'oidc\.keycloak\.clientSecret'=<argocd client secret из Vault kv/apps/argocd>
+#
+# clientSecret НЕ в этом файле и НЕ в командной строке — он течёт Vault → ESO →
+# k8s Secret argocd-oidc (label part-of=argocd), oidc.config ссылается $argocd-oidc:key.
+# Перед/после install применить: helm/argocd/externalsecret-oidc.yaml.
+
+global:
+  domain: argocd.kodik.ru
+  # ArgoCD-компоненты — на general NG (dedicated NG под taint'ом их не пустит и так).
+  nodeSelector:
+    workload: general
+
+configs:
+  params:
+    # TLS терминируется на ingress-nginx → argocd-server слушает HTTP (иначе redirect-loop).
+    server.insecure: true
+
+  cm:
+    url: https://argocd.kodik.ru
+    # OIDC напрямую на Keycloak (без Dex — Keycloak и есть IdP).
+    oidc.config: |
+      name: Keycloak
+      issuer: https://sso.kodik.ru/realms/kodik
+      clientID: argocd
+      # Секрет берётся из k8s Secret argocd-oidc (его наполняет ESO из Vault kv/apps/argocd).
+      clientSecret: $argocd-oidc:oidc.keycloak.clientSecret
+      requestedScopes:
+        - openid
+        - profile
+        - email
+        - groups
+
+  rbac:
+    # Группа Keycloak platform-admins → полный admin в ArgoCD. Остальные — без доступа.
+    policy.default: ""
+    policy.csv: |
+      g, platform-admins, role:admin
+    scopes: "[groups]"
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hostname: argocd.kodik.ru
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    tls: true
+
+# Image Updater ставится отдельно (свой чарт/манифест) — следит за тегами в YCR.

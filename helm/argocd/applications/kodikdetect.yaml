@@ -1,0 +1,36 @@
+# ArgoCD Application: kodikdetect (scan.kodik.ru).
+# Multi-source: source1 = generic-чарт, source2 = тот же репо как ref 'values' →
+# valueFiles ссылается $values/... (обход запрета ArgoCD на valueFiles вне path чарта).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodikdetect
+  namespace: argocd
+  annotations:
+    # ArgoCD Image Updater: следить за тегами dev-* в YCR, обновлять image.tag.
+    argocd-image-updater.argoproj.io/image-list: app=cr.yandex/crp7738saq8ngg8ad5tm/kodikdetect
+    argocd-image-updater.argoproj.io/app.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/app.allow-tags: regexp:^dev-[0-9a-f]{7}$
+    argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodikdetect
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodikdetect
+        valueFiles:
+          - $values/helm/apps/kodikdetect.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

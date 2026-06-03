@@ -5,8 +5,8 @@
 # — см. память reference_aiscan_api_keys.
 
 image:
-  repository: cr.yandex/__REGISTRY_ID__/kodikdetect
-  tag: latest
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikdetect
+  tag: dev-9b1d14c # управляется ArgoCD Image Updater (следит за тегами в YCR)
 
 replicaCount: 2
 containerPort: 3000
