@@ -71,39 +71,54 @@ probes:
     failureThreshold: 40 # 40×5s = 200с бюджет на cold ML-load
     periodSeconds: 5
 
-# initContainer тянет ML-веса (2.4 GB) из Selectel S3 в emptyDir перед стартом.
-# S3-креды — из того же ESO-секрета kodikrouter-api-env (ключи S3_ACCESS_KEY/S3_SECRET_KEY).
+# initContainer тянет ML-веса (2.4 GB .zip) из Selectel S3 → распаковывает в /weights.
+# Веса на S3: s3://kodik/KodikRouter/anonymizer/*.zip (распаковка даёт kodik-detector-epoch4-f1-89/
+# + gliner-medium-v2.1/). Используем образ api (там boto3+python); verify=False — Selectel
+# отдаёт цепочку с Russian Trusted CA, которой нет в CA-бандле. download_file стримит на диск
+# (не грузим 1.4GB zip в RAM). S3-креды/endpoint — из ESO-секрета kodikrouter-api-env.
 initContainers:
   - name: fetch-ml-weights
-    image: amazon/aws-cli:2.17.0
-    command: ["sh", "-c"]
+    image: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-api:latest
+    imagePullPolicy: Always
+    command: ["python", "-c"]
     args:
-      # --no-verify-ssl: Selectel S3 отдаёт цепочку с Russian Trusted CA, которой нет в
-      # CA-бандле aws-cli. Внутренняя закачка весов с известного эндпоинта — приемлемо.
       - |
-        aws --endpoint-url "$S3_ENDPOINT_URL" --no-verify-ssl s3 sync "s3://$S3_BUCKET/anonymizer/" /weights/ --only-show-errors && \
-        echo "weights synced:" && ls -1 /weights
+        import os, boto3, zipfile, urllib3
+        urllib3.disable_warnings()
+        s3 = boto3.client("s3",
+            endpoint_url="https://" + os.environ["S3_ENDPOINT"],
+            aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+            aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+            region_name=os.environ.get("S3_REGION", "ru-3"), verify=False)
+        b = os.environ["S3_BUCKET"]; pfx = "KodikRouter/anonymizer/"
+        objs = s3.list_objects_v2(Bucket=b, Prefix=pfx).get("Contents", [])
+        zips = [o["Key"] for o in objs if o["Key"].endswith(".zip")]
+        print("zips:", zips)
+        for k in zips:
+            tmp = "/weights/_dl.zip"
+            print("downloading", k)
+            s3.download_file(b, k, tmp)
+            zipfile.ZipFile(tmp).extractall("/weights")
+            os.remove(tmp)
+        print("weights:", sorted(os.listdir("/weights")))
     env:
-      - name: AWS_ACCESS_KEY_ID
+      - name: S3_ENDPOINT
+        valueFrom: { secretKeyRef: { name: kodikrouter-api-env, key: S3_ENDPOINT } }
+      - name: S3_ACCESS_KEY
         valueFrom: { secretKeyRef: { name: kodikrouter-api-env, key: S3_ACCESS_KEY } }
-      - name: AWS_SECRET_ACCESS_KEY
+      - name: S3_SECRET_KEY
         valueFrom: { secretKeyRef: { name: kodikrouter-api-env, key: S3_SECRET_KEY } }
-      - name: S3_ENDPOINT_URL
-        value: https://s3.ru-3.storage.selcloud.ru
+      - name: S3_REGION
+        valueFrom: { secretKeyRef: { name: kodikrouter-api-env, key: S3_REGION } }
       - name: S3_BUCKET
-        value: kodik
-      # Selectel S3 регион ru-3. Без этого aws-cli тянет регион из YC IMDS ('ru-central1-') → fail.
-      - name: AWS_DEFAULT_REGION
-        value: ru-3
-      - name: AWS_EC2_METADATA_DISABLED
-        value: "true"
+        valueFrom: { secretKeyRef: { name: kodikrouter-api-env, key: S3_BUCKET } }
     volumeMounts:
       - { name: ml-weights, mountPath: /weights }
 
 volumes:
   - name: ml-weights
     emptyDir:
-      sizeLimit: 4Gi
+      sizeLimit: 6Gi
 volumeMounts:
   - { name: ml-weights, mountPath: /weights, readOnly: true }
 
