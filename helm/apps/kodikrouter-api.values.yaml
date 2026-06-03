@@ -77,8 +77,10 @@ initContainers:
     image: amazon/aws-cli:2.17.0
     command: ["sh", "-c"]
     args:
+      # --no-verify-ssl: Selectel S3 отдаёт цепочку с Russian Trusted CA, которой нет в
+      # CA-бандле aws-cli. Внутренняя закачка весов с известного эндпоинта — приемлемо.
       - |
-        aws --endpoint-url "$S3_ENDPOINT_URL" s3 sync "s3://$S3_BUCKET/anonymizer/" /weights/ --only-show-errors && \
+        aws --endpoint-url "$S3_ENDPOINT_URL" --no-verify-ssl s3 sync "s3://$S3_BUCKET/anonymizer/" /weights/ --only-show-errors && \
         echo "weights synced:" && ls -1 /weights
     env:
       - name: AWS_ACCESS_KEY_ID
