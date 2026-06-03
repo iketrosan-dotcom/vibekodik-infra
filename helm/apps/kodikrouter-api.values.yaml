@@ -89,6 +89,11 @@ initContainers:
         value: https://s3.ru-3.storage.selcloud.ru
       - name: S3_BUCKET
         value: kodik
+      # Selectel S3 регион ru-3. Без этого aws-cli тянет регион из YC IMDS ('ru-central1-') → fail.
+      - name: AWS_DEFAULT_REGION
+        value: ru-3
+      - name: AWS_EC2_METADATA_DISABLED
+        value: "true"
     volumeMounts:
       - { name: ml-weights, mountPath: /weights }
 
