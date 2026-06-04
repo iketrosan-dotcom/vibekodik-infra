@@ -24,6 +24,15 @@ spec:
     - host: {{ . | quote }}
       http:
         paths:
+          {{- range $.Values.ingress.extraPaths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ .serviceName }}
+                port:
+                  number: {{ .servicePort }}
+          {{- end }}
           - path: {{ $.Values.ingress.path }}
             pathType: {{ $.Values.ingress.pathType }}
             backend:

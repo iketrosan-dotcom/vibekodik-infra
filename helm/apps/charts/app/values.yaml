@@ -58,6 +58,11 @@ ingress:
   annotations: {}
   path: /
   pathType: Prefix
+  # Доп. пути на ДРУГОЙ сервис в том же host/ingress (один TLS-серт).
+  # Напр. фронт отдаёт /, а /api проксируется прямо на backend-Service,
+  # минуя next.config-rewrite (он запекается на build-time и в k8s не работает).
+  # Элемент: {path, pathType, serviceName, servicePort}. Рендерятся ПЕРЕД path.
+  extraPaths: []
 
 # --- HPA ---
 autoscaling:
