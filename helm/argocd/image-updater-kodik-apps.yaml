@@ -1,0 +1,73 @@
+# ArgoCD Image Updater v1.2.1 — CR-based (контроллер запущен в CR-режиме, аннотации
+# на Application'ах он НЕ читает без CR; см. memory reference_kodik_k8s_apps_operations).
+#
+# Следит за тегами dev-<sha> в YCR (newest-build) для 3 сервисов mike2505/* и пишет
+# новый тег ОБРАТНО в реальный values-файл (helmvalues) ветки gitops → ArgoCD синкает.
+#
+# Грабли (отлажено 2026-06-05):
+#  - updateStrategy "latest" в v1.2.1 переименована в "newest-build" (иначе deprecation-warn).
+#  - manifestTargets.helm нужен И name (image.repository), И tag (image.tag) — иначе
+#    "could not find an image-name" (по умолчанию ищет image.name, а в чарте image.repository).
+#  - writeBackTarget резолвится ОТНОСИТЕЛЬНО source[0].path (= helm/apps/charts/app),
+#    поэтому путь к repo-root values = "../../<svc>.values.yaml" (иначе создаёт файл-пустышку
+#    в helm/apps/charts/app/helm/apps/...).
+#
+# hackathon НЕ здесь — он на схеме CI-git-bump (build.yml сам бампит gitops). Не смешивать,
+# иначе два писателя в один тег.
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: kodik-apps
+  namespace: argocd
+spec:
+  commonUpdateSettings:
+    updateStrategy: newest-build
+    allowTags: "regexp:^dev-[0-9a-f]{7}$"
+  writeBackConfig:
+    method: git
+    gitConfig:
+      repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      branch: gitops
+  applicationRefs:
+    - namePattern: kodikdetect
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikdetect
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikdetect.values.yaml"
+    - namePattern: kodikrouter-frontend
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-frontend
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikrouter-frontend.values.yaml"
+    - namePattern: kodikrouter-api
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-api
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikrouter-api.values.yaml"
