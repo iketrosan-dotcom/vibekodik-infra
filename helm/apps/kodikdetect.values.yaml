@@ -6,35 +6,29 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikdetect
-  tag: dev-9b1d14c # управляется ArgoCD Image Updater (следит за тегами в YCR)
-
+  tag: dev-707f0af # управляется ArgoCD Image Updater (следит за тегами в YCR)
 replicaCount: 2
 containerPort: 3000
-
 resources:
   requests:
     cpu: 100m
     memory: 256Mi
   limits:
     memory: 512Mi
-
 probes:
   enabled: true
   path: /
   initialDelaySeconds: 10
   periodSeconds: 10
-
 ingress:
   enabled: true
   host: scan.kodik.ru
   tlsSecretName: scan-kodik-ru-tls
   clusterIssuer: letsencrypt-prod
-
 externalSecret:
   enabled: true
   storeName: vault-kv
   storeKind: ClusterSecretStore
   remoteKey: apps/kodikdetect # Vault KV: kv/data/apps/kodikdetect (HIVE_API_KEY + SAPLING_*)
-
 serviceAccount:
   create: true
