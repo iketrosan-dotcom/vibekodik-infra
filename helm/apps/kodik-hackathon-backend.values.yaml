@@ -4,7 +4,7 @@
 # Бэкенд сам гонит `alembic upgrade head` на старте (идемпотентно к существующей БД).
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/hackathon-backend
-  tag: dev-40e0590
+  tag: dev-76471f0
   pullPolicy: IfNotPresent
 
 replicaCount: 1
