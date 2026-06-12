@@ -5,7 +5,7 @@
 # рантайм-env уже не применяется. API_TARGET оставлен только для dev/совместимости.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/hackathon-frontend
-  tag: dev-3c7d7cc
+  tag: dev-77ef5c2
   pullPolicy: IfNotPresent
 
 replicaCount: 1
