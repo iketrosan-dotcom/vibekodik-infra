@@ -34,8 +34,10 @@ env:
   MALLOC_TRIM_THRESHOLD_: "131072"
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
-  # base64-картинки в истории чата (см. память kodikrouter-max-request-body).
-  MAX_REQUEST_BODY_BYTES: "33554432"
+  # base64-картинки/файлы в запросе (см. память kodikrouter-max-request-body).
+  # 100 МБ: держим файлы до ~50 МБ (base64 ≈ +33% → ~67 МБ) + история. Должно быть
+  # >= ingress proxy-body-size и >= DO-proxy client_max_body_size (оба 100m).
+  MAX_REQUEST_BODY_BYTES: "104857600"
   # ML-веса берём из примонтированного /weights (см. initContainers), абсолютные пути.
   # Код чтит absolute path (service.py:_resolve_single_model_path).
   ANONYMIZER_MODEL_PATH: /weights/kodik-detector-epoch4-f1-89
@@ -138,7 +140,7 @@ ingress:
   tlsSecretName: api-kodikrouter-ru-tls
   clusterIssuer: letsencrypt-prod
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m" # файлы до ~50 МБ (base64 +33%)
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600" # SSE/streaming LLM
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
