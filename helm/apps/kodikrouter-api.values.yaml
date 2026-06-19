@@ -133,6 +133,15 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600" # SSE/streaming LLM
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Retry ТОЛЬКО на connect/reset к мёртвому/холодному поду (recycle, ML cold-load) — ДО
+    # первого байта клиенту. Лечит обрывы стрима в IDE (status=n/a, fetch failed, 0 байт).
+    # non_idempotent обязателен: POST по умолчанию не ретраится (nginx>=1.9.13).
+    # НЕ добавлять 'timeout'/'http_5xx': иначе перешлём запрос, уже ушедший в OpenRouter => двойной биллинг.
+    # Биллинг-безопасно: списание только в finalize() под `if not provider_errored`, а 200-SSE-заголовок
+    # уходит в nginx ДО вызова провайдера => nginx не ретраит после первого байта (streaming.py:340/365).
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error non_idempotent"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "2"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "5"
 externalSecret:
   enabled: true
   storeName: vault-kv
