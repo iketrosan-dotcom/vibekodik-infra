@@ -15,7 +15,11 @@ replicaCount: 2
 containerPort: 8000
 # --- КРИТИЧНО (live-аудит 2026-06-03 + память dima-memory-tuning/masking-bottleneck) ---
 # workers=1: на cold-load DeBERTa-анонимайзера workers=2 ловит race и тихо падает.
-# limit-max-requests: периодический recycle воркера сбрасывает залипший event-loop.
+# limit-max-requests: БЫЛО 5000 как костыль против залипа event-loop. Залип устранён —
+#   masking теперь off-loop (asyncio.to_thread, gateway.py:192/331). Recycle каждые 5000 req
+#   рвал стримы в IDE (рестарт+ML cold-load, см. proxy-next-upstream ниже). Поднял до 100000
+#   (recycle ~раз в сутки = RSS-клапан остаётся), обрывы recycl'а добивает ingress-retry.
+#   TODO: убрать совсем после проверки flat RSS за 48ч (kubectl top pod). НЕ возвращать 5000.
 # limit-concurrency: бэкпрешер. Restart=always обеспечивается Deployment по умолчанию.
 args:
 - uvicorn
@@ -23,7 +27,7 @@ args:
 - --host=0.0.0.0
 - --port=8000
 - --workers=1
-- --limit-max-requests=5000
+- --limit-max-requests=100000
 - --limit-concurrency=64
 env:
   # glibc arena/trim tuning против RSS-фрагментации (Dima's tuning, все 4 как в systemd).
