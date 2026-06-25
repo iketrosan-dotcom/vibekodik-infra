@@ -3,40 +3,33 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-frontend
-  tag: dev-5bac7ec # управляется ArgoCD Image Updater
-
+  tag: dev-ae99692 # управляется ArgoCD Image Updater
 replicaCount: 2
 containerPort: 3000
-
 env:
   # Next.js обращается к API через публичный домен.
   NEXT_PUBLIC_API_URL: https://api.kodikrouter.ru
-
 resources:
   requests:
     cpu: 100m
     memory: 256Mi
   limits:
     memory: 512Mi
-
 probes:
   enabled: true
   path: /
   initialDelaySeconds: 10
   periodSeconds: 10
-
 ingress:
   enabled: true
   host: kodikrouter.ru
   extraHosts:
-    - www.kodikrouter.ru
+  - www.kodikrouter.ru
   tlsSecretName: kodikrouter-ru-tls
   clusterIssuer: letsencrypt-prod
-
 # Фронту обычно секреты не нужны; если нужны build-time/runtime — включить.
 externalSecret:
   enabled: false
   lockboxSecretId: __LOCKBOX_KODIKROUTER_FRONTEND_ID__
-
 serviceAccount:
   create: true
