@@ -1,0 +1,51 @@
+# Kodik+ backend (FastAPI + SQLAlchemy async + Postgres + S3). ns kodikplus.
+# Внутренний (без ingress) — фронт ходит на http://kodikplus-backend:8000/api/v1
+# через Next-rewrite /api/proxy (запечён build-arg'ом в образе фронта).
+#
+# Миграции: образ НЕ гонит alembic сам (CMD=uvicorn), поэтому initContainer
+# `migrate` прогоняет `alembic upgrade head` перед стартом (replicaCount=1 —
+# без гонки двух подов на первичном создании схемы; alembic async/asyncpg).
+#
+# Секреты: Vault KV kv/apps/kodikplus-backend (DATABASE_URL/SECRET_KEY/CORS_ORIGINS/
+# S3_*). Тянутся ESO в Secret kodikplus-backend-env → envFrom (и в initContainer).
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend
+  tag: dev-4637c76 # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8000
+service:
+  port: 8000 # фронт обращается http://kodikplus-backend:8000
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 768Mi }
+
+probes:
+  enabled: true
+  path: /api/v1/health
+  initialDelaySeconds: 15
+  periodSeconds: 15
+
+# Прогон миграций перед стартом приложения. Тот же образ (alembic.ini+migrations
+# в нём), envFrom тянет DATABASE_URL/SECRET_KEY из ESO-секрета. :latest+Always —
+# чтобы тег миграции не отставал от выкатываемого образа (Image Updater меняет
+# только image.tag основного контейнера).
+initContainers:
+  - name: migrate
+    image: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend:latest
+    imagePullPolicy: Always
+    command: ["alembic", "upgrade", "head"]
+    envFrom:
+      - secretRef:
+          name: kodikplus-backend-env
+
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/kodikplus-backend
+
+serviceAccount:
+  create: true

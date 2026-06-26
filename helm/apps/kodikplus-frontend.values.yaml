@@ -1,0 +1,36 @@
+# Kodik+ frontend (Next.js 15 standalone). ns kodikplus. Публичный — plus.kodik.ru.
+#
+# Бэкенд-адрес запечён в образ build-arg'ом NEXT_PUBLIC_API_BASE_URL=
+# http://kodikplus-backend:8000/api/v1 (next.config rewrite /api/proxy + RSC —
+# build-time). Браузер ходит только на свой origin /api/proxy → Next проксирует
+# server-side на бэкенд-Service. Поэтому ingress.extraPaths НЕ нужен, и рантайм-
+# env фронту не требуется.
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-frontend
+  tag: dev-dd443d4 # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+containerPort: 3000
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 512Mi }
+
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+ingress:
+  enabled: true
+  host: plus.kodik.ru
+  tlsSecretName: plus-kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+
+externalSecret:
+  enabled: false
+
+serviceAccount:
+  create: true
