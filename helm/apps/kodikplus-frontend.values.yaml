@@ -7,30 +7,24 @@
 # env фронту не требуется.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-frontend
-  tag: dev-dd443d4 # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  tag: dev-3a41dc8 # управляется ArgoCD Image Updater (newest-build dev-<sha>)
   pullPolicy: IfNotPresent
-
 replicaCount: 2
 containerPort: 3000
-
 resources:
-  requests: { cpu: 100m, memory: 256Mi }
-  limits: { memory: 512Mi }
-
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 512Mi}
 probes:
   enabled: true
   path: /
   initialDelaySeconds: 10
   periodSeconds: 10
-
 ingress:
   enabled: true
   host: plus.kodik.ru
   tlsSecretName: plus-kodik-ru-tls
   clusterIssuer: letsencrypt-prod
-
 externalSecret:
   enabled: false
-
 serviceAccount:
   create: true
