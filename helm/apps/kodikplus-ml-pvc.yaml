@@ -1,0 +1,13 @@
+# Kodik+ ml — персистентный том под ChromaDB (vector store: developers/projects/
+# roadmaps). CHROMA_PATH=/app/data/chroma → монтируется PVC на /app/data.
+# RWO + replicaCount=1 (chroma = локальный файловый стор, горизонтально не шарится).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kodikplus-ml-chroma
+  namespace: kodikplus
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

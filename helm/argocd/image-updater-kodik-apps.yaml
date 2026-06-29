@@ -99,3 +99,17 @@ spec:
           repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikplus-frontend.values.yaml"
+    - namePattern: kodikplus-ml
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-ml
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikplus-ml.values.yaml"
