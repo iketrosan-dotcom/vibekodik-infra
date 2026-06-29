@@ -11,24 +11,19 @@
 # SECRET_KEY...). HTTP нет → пробы выключены. Тег синхронен backend (Image Updater).
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend
-  tag: dev-92c3c93 # тот же образ что backend; управляется Image Updater
+  tag: dev-5f908e1 # тот же образ что backend; управляется Image Updater
   pullPolicy: IfNotPresent
-
 replicaCount: 1
 args: ["arq", "app.services.queue.WorkerSettings"]
-
 probes:
   enabled: false # воркер без HTTP-эндпоинта
-
 resources:
-  requests: { cpu: 200m, memory: 512Mi }
-  limits: { memory: 2Gi }
-
+  requests: {cpu: 200m, memory: 512Mi}
+  limits: {memory: 2Gi}
 externalSecret:
   enabled: true
   storeName: vault-kv
   storeKind: ClusterSecretStore
   remoteKey: apps/kodikplus-backend
-
 serviceAccount:
   create: true
