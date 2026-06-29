@@ -1,0 +1,34 @@
+# Kodik+ ARQ-worker — исполняет фоновые ML-задачи backend'а (analyze_requirements,
+# generate_artifacts, refine_artifact, transcribe_audio, team_matching,
+# generate_roadmap, reindex_developer). Тот же образ что kodikplus-backend, но
+# команда `arq app.services.queue.WorkerSettings` вместо uvicorn.
+#
+# БЕЗ него: web ставит задачи в Redis (ARQ), но никто не исполняет → AI-ассистент
+# молчит («ИИ-агент пока не ответил»). Берёт задачи из Redis, зовёт ml
+# (http://kodikplus-ml:8000), пишет результат в Postgres (ml_jobs), фронт поллит.
+#
+# Секреты — тот же Vault apps/kodikplus-backend (DATABASE_URL/REDIS_URL/ML_SERVICE_URL/
+# SECRET_KEY...). HTTP нет → пробы выключены. Тег синхронен backend (Image Updater).
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend
+  tag: dev-92c3c93 # тот же образ что backend; управляется Image Updater
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+args: ["arq", "app.services.queue.WorkerSettings"]
+
+probes:
+  enabled: false # воркер без HTTP-эндпоинта
+
+resources:
+  requests: { cpu: 200m, memory: 512Mi }
+  limits: { memory: 2Gi }
+
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/kodikplus-backend
+
+serviceAccount:
+  create: true

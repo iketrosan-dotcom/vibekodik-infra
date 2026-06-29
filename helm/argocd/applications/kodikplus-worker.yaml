@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodikplus-worker
+  namespace: argocd
+  # Тег image.tag бампит ArgoCD Image Updater (CR kodik-apps, образ kodikplus-backend).
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodikplus
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodikplus-worker
+        valueFiles:
+          - $values/helm/apps/kodikplus-worker.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
