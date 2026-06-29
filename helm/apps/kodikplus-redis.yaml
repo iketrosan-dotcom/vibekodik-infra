@@ -1,0 +1,42 @@
+# Kodik+ Redis — транспорт ARQ-очереди фоновых ML-задач (lifespan init_pool).
+# Эфемерный (save off, appendonly no): истина о статусе задач в Postgres ml_jobs,
+# Redis только «кто/когда выполнит». Воркер и ML — Фаза 2. ns kodikplus.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodikplus-redis
+  namespace: kodikplus
+  labels: { app: kodikplus-redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kodikplus-redis }
+  template:
+    metadata:
+      labels: { app: kodikplus-redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--save", "", "--appendonly", "no"]
+          ports:
+            - containerPort: 6379
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kodikplus-redis
+  namespace: kodikplus
+  labels: { app: kodikplus-redis }
+spec:
+  selector: { app: kodikplus-redis }
+  ports:
+    - port: 6379
+      targetPort: 6379
