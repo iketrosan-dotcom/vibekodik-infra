@@ -10,7 +10,7 @@
 # S3_*). Тянутся ESO в Secret kodikplus-backend-env → envFrom (и в initContainer).
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend
-  tag: dev-da738be # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  tag: dev-e463f1f # управляется ArgoCD Image Updater (newest-build dev-<sha>)
   pullPolicy: IfNotPresent
 replicaCount: 1
 containerPort: 8000
