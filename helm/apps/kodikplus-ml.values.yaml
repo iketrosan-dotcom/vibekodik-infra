@@ -12,39 +12,33 @@
 # проверяет ollama → ошибка ловится, HTTP 200) — для пробы достаточно.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-ml
-  tag: dev-1ba8b1a # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  tag: dev-6b41c0e # управляется ArgoCD Image Updater (newest-build dev-<sha>)
   pullPolicy: IfNotPresent
-
 replicaCount: 1 # chroma = локальный файловый стор на RWO PVC
 containerPort: 8000
 service:
   port: 8000 # backend обращается http://kodikplus-ml:8000
-
 resources:
-  requests: { cpu: 500m, memory: 1536Mi }
-  limits: { cpu: "3", memory: 6Gi }
-
+  requests: {cpu: 500m, memory: 1536Mi}
+  limits: {cpu: "3", memory: 6Gi}
 probes:
   enabled: true
   path: /ml/health
   initialDelaySeconds: 25
   periodSeconds: 15
-
 volumes:
-  - name: chroma
-    persistentVolumeClaim:
-      claimName: kodikplus-ml-chroma
-  - name: storage
-    emptyDir: { sizeLimit: 2Gi }
+- name: chroma
+  persistentVolumeClaim:
+    claimName: kodikplus-ml-chroma
+- name: storage
+  emptyDir: {sizeLimit: 2Gi}
 volumeMounts:
-  - { name: chroma, mountPath: /app/data }
-  - { name: storage, mountPath: /app/storage }
-
+- {name: chroma, mountPath: /app/data}
+- {name: storage, mountPath: /app/storage}
 externalSecret:
   enabled: true
   storeName: vault-kv
   storeKind: ClusterSecretStore
   remoteKey: apps/kodikplus-ml
-
 serviceAccount:
   create: true
