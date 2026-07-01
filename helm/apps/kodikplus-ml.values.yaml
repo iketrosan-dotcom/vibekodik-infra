@@ -12,7 +12,7 @@
 # проверяет ollama → ошибка ловится, HTTP 200) — для пробы достаточно.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-ml
-  tag: dev-6b41c0e # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  tag: dev-3ced941 # управляется ArgoCD Image Updater (newest-build dev-<sha>)
   pullPolicy: IfNotPresent
 replicaCount: 1 # chroma = локальный файловый стор на RWO PVC
 containerPort: 8000
