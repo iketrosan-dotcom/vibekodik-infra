@@ -3,7 +3,7 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-frontend
-  tag: dev-ae99692 # управляется ArgoCD Image Updater
+  tag: dev-3d4fd8f # управляется ArgoCD Image Updater
 replicaCount: 2
 containerPort: 3000
 env:
