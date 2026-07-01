@@ -9,7 +9,7 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikrouter-api
-  tag: dev-4b9d425 # управляется ArgoCD Image Updater
+  tag: dev-5f9e601 # управляется ArgoCD Image Updater
   pullPolicy: Always # временно: итерируем образ под тем же тегом (вернуть IfNotPresent после стабилизации)
 replicaCount: 2
 containerPort: 8000
