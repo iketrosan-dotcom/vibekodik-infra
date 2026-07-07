@@ -23,8 +23,11 @@ args:
 - --port=8000
 - --workers=4
 env:
-  # ML-модель (kodik-detector, 8.4M — токенайзер+малая голова) запечена в образ,
-  # путь дефолтный models/kodik-detector-epoch4-f1-89 относительно WORKDIR /srv.
+  # ⚠️ Веса анонимайзера в образе = 135-байтный git-LFS-указатель (real blob не тянулся с
+  # ryleigh). Реальный DeBERTa (4.9G) лежит в S3 (s3://kodik/Kodik-API/models/...) —
+  # тянем его initContainer'ом в /weights и переопределяем путь. from_pretrained (hybrid_detector.py:65)
+  # читает абсолютный путь. Иначе анонимайзер падал бы при первом вызове (грузится лениво).
+  ANONYMIZER_MODEL_PATH: /weights/kodik-detector-epoch4-f1-89
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
 resources:
@@ -62,6 +65,50 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-next-upstream: "error non_idempotent"
     nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "2"
     nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "5"
+# Веса анонимайзера из S3 (тот же приём, что kodikrouter-api/kodik-embedding). S3-кредов
+# в секрете kodik-api НЕТ (в .env их не было) → берём из соседнего kodik-embedding-env
+# (та же ns, тот же бакет "kodik"). verify=False — Selectel S3 отдаёт Russian Trusted CA.
+initContainers:
+  - name: fetch-ml-weights
+    image: cr.yandex/crp7738saq8ngg8ad5tm/kodik-api:latest
+    imagePullPolicy: IfNotPresent
+    command: ["python", "-c"]
+    args:
+      - |
+        import os, boto3, urllib3
+        urllib3.disable_warnings()
+        s3 = boto3.client("s3",
+            endpoint_url="https://" + os.environ["S3_ENDPOINT"].replace("https://", ""),
+            aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+            aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+            region_name=os.environ.get("S3_REGION", "ru-1"), verify=False)
+        b = os.environ["S3_BUCKET"]; pfx = "Kodik-API/models/"
+        pag = s3.get_paginator("list_objects_v2"); n = 0
+        for page in pag.paginate(Bucket=b, Prefix=pfx):
+            for o in page.get("Contents", []):
+                dst = os.path.join("/weights", o["Key"][len(pfx):])
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                s3.download_file(b, o["Key"], dst); n += 1
+        print("downloaded", n, "files:", sorted(os.listdir("/weights")))
+    env:
+      - name: S3_ENDPOINT
+        valueFrom: { secretKeyRef: { name: kodik-embedding-env, key: S3_ENDPOINT } }
+      - name: S3_ACCESS_KEY
+        valueFrom: { secretKeyRef: { name: kodik-embedding-env, key: S3_ACCESS_KEY } }
+      - name: S3_SECRET_KEY
+        valueFrom: { secretKeyRef: { name: kodik-embedding-env, key: S3_SECRET_KEY } }
+      - name: S3_REGION
+        valueFrom: { secretKeyRef: { name: kodik-embedding-env, key: S3_REGION } }
+      - name: S3_BUCKET
+        valueFrom: { secretKeyRef: { name: kodik-embedding-env, key: S3_BUCKET } }
+    volumeMounts:
+      - { name: ml-weights, mountPath: /weights }
+volumes:
+  - name: ml-weights
+    emptyDir:
+      sizeLimit: 8Gi
+volumeMounts:
+  - { name: ml-weights, mountPath: /weights, readOnly: true }
 externalSecret:
   enabled: true
   storeName: vault-kv
