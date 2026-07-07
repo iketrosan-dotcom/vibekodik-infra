@@ -26,7 +26,7 @@ spec:
   writeBackConfig:
     method: git
     gitConfig:
-      repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
       branch: gitops
   applicationRefs:
     - namePattern: kodikdetect
@@ -40,7 +40,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikdetect.values.yaml"
     - namePattern: kodikrouter-frontend
@@ -54,7 +54,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikrouter-frontend.values.yaml"
     - namePattern: kodikrouter-api
@@ -68,7 +68,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikrouter-api.values.yaml"
     - namePattern: kodikplus-backend
@@ -82,7 +82,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikplus-backend.values.yaml"
     - namePattern: kodikplus-frontend
@@ -96,7 +96,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikplus-frontend.values.yaml"
     - namePattern: kodikplus-ml
@@ -110,7 +110,7 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikplus-ml.values.yaml"
     - namePattern: kodikplus-worker
@@ -124,6 +124,34 @@ spec:
       writeBackConfig:
         method: git
         gitConfig:
-          repository: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
           branch: gitops
           writeBackTarget: "helmvalues:../../kodikplus-worker.values.yaml"
+    - namePattern: kodikdemo-web
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikdemo-web
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikdemo-web.values.yaml"
+    - namePattern: kodikdemo-anonymizer
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodikdemo-anonymizer
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodikdemo-anonymizer.values.yaml"
