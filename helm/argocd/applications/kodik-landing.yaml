@@ -11,14 +11,14 @@ spec:
     server: https://kubernetes.default.svc
     namespace: kodik-ide
   sources:
-    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+    - repoURL: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
       targetRevision: gitops
       path: helm/apps/charts/app
       helm:
         releaseName: kodik-landing
         valueFiles:
           - $values/helm/apps/kodik-landing.values.yaml
-    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+    - repoURL: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
       targetRevision: gitops
       ref: values
   syncPolicy:
