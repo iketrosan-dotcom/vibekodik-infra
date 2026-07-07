@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodikdemo-anonymizer
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodikdemo
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodikdemo-anonymizer
+        valueFiles:
+          - $values/helm/apps/kodikdemo-anonymizer.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

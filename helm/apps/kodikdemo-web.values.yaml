@@ -1,0 +1,34 @@
+# KodikShield demo (ЛОКО-Банк) — web (Next.js). ns kodikdemo. Публичный — demo-loco.kodik.ru.
+# API-роуты (app/api/anonymize, /complete) — route handlers, env читается в РАНТАЙМЕ
+# (build-time-bake-грабли next-rewrites тут НЕТ). ANONYMIZER_URL/OPENROUTER_* — из ESO-секрета.
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikdemo-web
+  tag: dev-ee276f2 # содержимое = commit 7ccff75
+  pullPolicy: IfNotPresent
+replicaCount: 1
+containerPort: 3000
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 512Mi}
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 10
+ingress:
+  enabled: true
+  host: demo-loco.kodik.ru
+  tlsSecretName: demo-loco-kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+  annotations:
+    # LLM-стриминг (SSE) через /api/complete
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/kodikdemo # Vault KV: kv/data/apps/kodikdemo (общий с anonymizer)
+serviceAccount:
+  create: true
