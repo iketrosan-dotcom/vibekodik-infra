@@ -3,7 +3,7 @@
 # (build-time-bake-грабли next-rewrites тут НЕТ). ANONYMIZER_URL/OPENROUTER_* — из ESO-секрета.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikdemo-web
-  tag: dev-01ad7e9 # + LLM forward-proxy (PROXY_URL: openrouter.ai блочит RU-egress YC NAT)
+  tag: dev-3642f43 # Дима: прокси по умолчанию proxy.aikodik.ru, без X-Proxy-Auth
   pullPolicy: IfNotPresent
 replicaCount: 1
 containerPort: 3000
