@@ -1,0 +1,32 @@
+# ArgoCD Application: kodik-api (api.vibekodik.ru, IDE-бэкенд).
+# Миграция Selectel ryleigh+mariela → k8s (2026-07-06). БД: MDB kodik-ide-pg (НЕ strangler —
+# betty в Selectel LAN, из k8s недостижима приватно). Данные переливаются pg_dump'ом,
+# финальный синк на cutover. Image Updater НЕ подключён: нет доступа к mike2505/Kodik-API
+# (ждём коллабораторство от Димы), теги бампаются руками.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodik-api
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodik-ide
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodik-api
+        valueFiles:
+          - $values/helm/apps/kodik-api.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

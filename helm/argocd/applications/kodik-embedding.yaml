@@ -1,0 +1,29 @@
+# ArgoCD Application: kodik-embedding (anonymizer/embedding, внутренний ClusterIP).
+# Миграция Selectel susanne#1 → k8s (2026-07-06). Веса 5.22GB из S3 initContainer'ом.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kodik-embedding
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kodik-ide
+  sources:
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      path: helm/apps/charts/app
+      helm:
+        releaseName: kodik-embedding
+        valueFiles:
+          - $values/helm/apps/kodik-embedding.values.yaml
+    - repoURL: git@github.com:iketrosan-dotcom/vibekodik-infra.git
+      targetRevision: gitops
+      ref: values
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

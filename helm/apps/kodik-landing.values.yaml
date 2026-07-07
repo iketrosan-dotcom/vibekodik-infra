@@ -1,0 +1,35 @@
+# Kodik landing — kodik.ru (Next.js 16, репо mike2505/kodik-new-landing). Namespace: kodik-ide.
+# Мигрировано с Selectel diana (Next start :3000 за nginx) 2026-07-06.
+# Секретов нет (маркетинговый сайт, rewrites внутренние — /blog/:slug.md → /llms/blog/:slug).
+# Maintenance-страница (kodik-status, diana :8080) НЕ переносится — в k8s это лишнее.
+# Редиректы vibekodik.ru/aikodik.ru → kodik.ru решаются на cutover отдельным ingress'ом.
+
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodik-landing
+  tag: dev-0671785
+  pullPolicy: IfNotPresent
+replicaCount: 2
+containerPort: 3000
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+probes:
+  enabled: true
+  path: /
+  initialDelaySeconds: 5
+  periodSeconds: 15
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+ingress:
+  enabled: true
+  host: kodik.ru
+  tlsSecretName: kodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+externalSecret:
+  enabled: false
+serviceAccount:
+  create: true

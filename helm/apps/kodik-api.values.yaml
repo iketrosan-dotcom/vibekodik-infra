@@ -1,0 +1,71 @@
+# Kodik IDE API (FastAPI, монорепо mike2505/Kodik-API). Namespace: kodik-ide.
+# Мигрировано с Selectel ryleigh+mariela (2× VM 4vCPU/32GB, uvicorn --workers 4) 2026-07-06.
+#
+# Секреты: Vault kv/apps/kodik-api (~60 ключей: живой .env с ryleigh + overrides:
+# DATABASE_URL→MDB kodik-ide-pg, REDIS_HOST→kodik-redis, ENABLE_AUTO_RENEWAL=false
+# до cutover — иначе APScheduler на копии БД начнёт реальные списания YooKassa/Stripe).
+#
+# ВАЖНО (cutover): renewal-scheduler запускается В КАЖДОМ поде (in-process APScheduler,
+# app/main.py startup). До включения ENABLE_AUTO_RENEWAL в k8s нужен либо выделенный
+# single-replica worker, либо оставить как на VM (там тоже 2 хоста × 4 воркера — есть
+# защита на уровне приложения, проверить с Димой).
+
+image:
+  repository: cr.yandex/crp7738saq8ngg8ad5tm/kodik-api
+  tag: dev-da81d9a
+  pullPolicy: IfNotPresent
+replicaCount: 2
+containerPort: 8000
+args:
+- uvicorn
+- app.main:app
+- --host=0.0.0.0
+- --port=8000
+- --workers=4
+env:
+  # ML-модель (kodik-detector, 8.4M — токенайзер+малая голова) запечена в образ,
+  # путь дефолтный models/kodik-detector-epoch4-f1-89 относительно WORKDIR /srv.
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    memory: 10Gi
+probes:
+  enabled: true
+  # /healthz — лёгкий (без внешних зависимостей). НЕ /health: тот дёргает
+  # DB/S3/OpenRouter/PayKeeper и может флапать liveness из-за чужих аутэйджей.
+  path: /healthz
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  startup:
+    enabled: true
+    failureThreshold: 24 # 24×5s = 120с на torch import + 4 воркера
+    periodSeconds: 5
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+ingress:
+  enabled: true
+  host: api.vibekodik.ru
+  tlsSecretName: api-vibekodik-ru-tls
+  clusterIssuer: letsencrypt-prod
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # IDE-чат стримит ответы LLM (SSE) — как у kodikrouter-api.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Retry только до первого байта (connect/reset) — биллинг-безопасно, см. kodikrouter-api.
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error non_idempotent"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "2"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "5"
+externalSecret:
+  enabled: true
+  storeName: vault-kv
+  storeKind: ClusterSecretStore
+  remoteKey: apps/kodik-api
+serviceAccount:
+  create: true
