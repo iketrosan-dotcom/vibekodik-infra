@@ -55,11 +55,11 @@ podDisruptionBudget:
 ingress:
   enabled: true
   host: api.vibekodik.ru
-  # nginx на Selectel-ryleigh обслуживал API на нескольких хостах-алиасах — переносим все,
-  # чтобы флип любого из них не давал 404. Один мульти-SAN серт (api-vibekodik-ru-tls).
-  extraHosts:
-    - api.kodik.ru
-    - api.aikodik.ru
+  # Алиасы api.kodik.ru/api.aikodik.ru временно убраны из SAN: их HTTP-01 challenge отдавал
+  # 503 и блокировал мульти-SAN серт основного хоста. Вернуть после стабилизации cutover.
+  # extraHosts:
+  #   - api.kodik.ru
+  #   - api.aikodik.ru
   tlsSecretName: api-vibekodik-ru-tls
   clusterIssuer: letsencrypt-prod
   annotations:
