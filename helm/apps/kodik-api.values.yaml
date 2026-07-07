@@ -14,9 +14,8 @@ image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodik-api
   tag: dev-da81d9a
   pullPolicy: IfNotPresent
-# 1 реплика до cutover: кластер на потолке node-группы, трафика на api.vibekodik.ru ещё нет
-# (DNS не флипнут). После cutover вернуть 2 + при необходимости расширить node-группу.
-replicaCount: 1
+# 2 реплики на cutover (HA). Свободные ноды по requests есть (13-46%).
+replicaCount: 2
 containerPort: 8000
 args:
 - uvicorn
@@ -34,10 +33,9 @@ env:
   MKL_NUM_THREADS: "2"
 resources:
   requests:
-    # 100m: ноды по факту простаивают (1-7%), но забиты requests'ами соседей, а node-группа
-    # на максимуме. CPU-лимита нет → torch/anonymizer бёрстят свободно. Вернуть ~2 на cutover.
-    cpu: "100m"
-    memory: 3Gi
+    # prod-sizing на cutover. CPU-лимита нет → torch/anonymizer бёрстят выше request.
+    cpu: "1"
+    memory: 4Gi
   limits:
     memory: 10Gi
 probes:
