@@ -27,7 +27,9 @@ env:
   MALLOC_ARENA_MAX: "2"
 resources:
   requests:
-    cpu: "2"
+    # 100m: node-группа на максимуме, ноды забиты requests'ами соседей (по факту простой 1-7%).
+    # CPU-лимита нет → DeBERTa бёрстит свободно. Вернуть ~2 на cutover.
+    cpu: "100m"
     memory: 6Gi
   limits:
     memory: 10Gi

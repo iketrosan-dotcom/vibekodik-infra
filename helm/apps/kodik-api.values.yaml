@@ -34,8 +34,10 @@ env:
   MKL_NUM_THREADS: "2"
 resources:
   requests:
-    cpu: "500m" # только для планировщика; CPU-лимита нет → torch/anonymizer бёрстят свободно
-    memory: 4Gi
+    # 100m: ноды по факту простаивают (1-7%), но забиты requests'ами соседей, а node-группа
+    # на максимуме. CPU-лимита нет → torch/anonymizer бёрстят свободно. Вернуть ~2 на cutover.
+    cpu: "100m"
+    memory: 3Gi
   limits:
     memory: 10Gi
 probes:
