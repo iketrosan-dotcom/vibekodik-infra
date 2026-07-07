@@ -14,10 +14,12 @@ env:
   ANONYMIZER_ML_ENABLED: "true"
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
-# DeBERTa+GLiNER в RAM ~3GB (по опыту kodikrouter-api RSS 3.2GB). CPU real (не burst).
+# DeBERTa+GLiNER в RAM ~3GB (по опыту kodikrouter-api RSS 3.2GB).
+# CPU request 1 (не 2): general-NG на max size (квота RAM 2026-07-07), свободно ≤1.9 CPU
+# на ноду. Демо-трафик единичный, ноды реально idle (~5%) → бёрст без cpu-limit хватает.
 resources:
   requests:
-    cpu: "2"
+    cpu: "1"
     memory: 4Gi
   limits:
     memory: 6Gi
