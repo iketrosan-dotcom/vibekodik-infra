@@ -12,7 +12,7 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodik-api
-  tag: dev-da81d9a
+  tag: dev-925ebb5 # мёрж Димы 2026-07-07 16:54 (вчерашний фикс) — пересборка после cutover
   pullPolicy: IfNotPresent
 # 2 реплики на cutover (HA). Свободные ноды по requests есть (13-46%).
 replicaCount: 2
