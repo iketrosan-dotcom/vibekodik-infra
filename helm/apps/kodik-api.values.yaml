@@ -63,7 +63,9 @@ ingress:
   tlsSecretName: api-vibekodik-ru-tls
   clusterIssuer: letsencrypt-prod
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # 1g покрывает app-лимит marketplace-media (video 500MB hard-cap). Аннотация nginx-ingress
+    # применяется ко всему хосту api.vibekodik.ru (per-path скоуп невозможен одним Ingress).
+    nginx.ingress.kubernetes.io/proxy-body-size: "1g"
     # IDE-чат стримит ответы LLM (SSE) — как у kodikrouter-api.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
