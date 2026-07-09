@@ -7,7 +7,7 @@
 # env фронту не требуется.
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-frontend
-  tag: dev-ff766cb # управляется ArgoCD Image Updater (newest-build dev-<sha>)
+  tag: dev-419787e # управляется ArgoCD Image Updater (newest-build dev-<sha>)
   pullPolicy: IfNotPresent
 replicaCount: 2
 containerPort: 3000
