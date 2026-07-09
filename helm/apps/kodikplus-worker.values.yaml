@@ -11,7 +11,7 @@
 # SECRET_KEY...). HTTP нет → пробы выключены. Тег синхронен backend (Image Updater).
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodikplus-backend
-  tag: dev-bbd2950 # тот же образ что backend; управляется Image Updater
+  tag: dev-23d8674 # тот же образ что backend; управляется Image Updater
   pullPolicy: IfNotPresent
 replicaCount: 1
 args: ["arq", "app.services.queue.WorkerSettings"]
