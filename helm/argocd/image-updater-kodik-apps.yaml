@@ -29,6 +29,20 @@ spec:
       repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
       branch: gitops
   applicationRefs:
+    - namePattern: kodik-api
+      images:
+        - alias: app
+          imageName: cr.yandex/crp7738saq8ngg8ad5tm/kodik-api
+          manifestTargets:
+            helm:
+              name: image.repository
+              tag: image.tag
+      writeBackConfig:
+        method: git
+        gitConfig:
+          repository: git@kodik.gitlab.yandexcloud.net:kristian/vibekodik-infra.git
+          branch: gitops
+          writeBackTarget: "helmvalues:../../kodik-api.values.yaml"
     - namePattern: kodikdetect
       images:
         - alias: app
