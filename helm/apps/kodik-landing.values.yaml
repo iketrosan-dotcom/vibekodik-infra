@@ -6,7 +6,7 @@
 
 image:
   repository: cr.yandex/crp7738saq8ngg8ad5tm/kodik-landing
-  tag: dev-d00cbfc # redirect /profile/market -> /marketplace (хакатон §10.1 wrong URL), 2026-07-09
+  tag: dev-b2be14a # redirect /profile/market -> /marketplace via next.config redirects(), 2026-07-09
   pullPolicy: IfNotPresent
 replicaCount: 2
 containerPort: 3000
